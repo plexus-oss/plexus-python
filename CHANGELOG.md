@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.6.3] - 2026-06-02 - Remove install_id / source_id auto-suffix
+## [0.7.1] - 2026-06-02 - Remove install_id / source_id auto-suffix
 
 ### Changed
 
