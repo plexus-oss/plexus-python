@@ -89,11 +89,9 @@ class WebSocketTransport:
         source_id: str,
         ws_url: str,
         *,
-        install_id: str = "",
         agent_version: str = "0.0.0",
         platform: str = "python-sdk",
         auto_reconnect: bool = True,
-        on_source_id_assigned: Optional[Callable[[str], None]] = None,
         on_clock_synced: Optional[Callable[[int], None]] = None,
     ):
         if not api_key:
@@ -103,12 +101,10 @@ class WebSocketTransport:
 
         self.api_key = api_key
         self.source_id = source_id
-        self.install_id = install_id
         self.ws_url = _ensure_device_path(ws_url)
         self.agent_version = agent_version
         self.platform = platform
         self.auto_reconnect = auto_reconnect
-        self._on_source_id_assigned = on_source_id_assigned
         self._on_clock_synced = on_clock_synced
 
         self._commands: Dict[str, _RegisteredCommand] = {}
@@ -278,16 +274,13 @@ class WebSocketTransport:
             self._ws = ws
 
         # 1. Send device_auth
-        desired_source_id = self.source_id
         auth = {
             "type": "device_auth",
             "api_key": self.api_key,
-            "source_id": desired_source_id,
+            "source_id": self.source_id,
             "platform": self.platform,
             "agent_version": self.agent_version,
         }
-        if self.install_id:
-            auth["install_id"] = self.install_id
         if self._commands:
             auth["commands"] = [c.to_manifest() for c in self._commands.values()]
         ws.send(json.dumps(auth))
@@ -311,22 +304,6 @@ class WebSocketTransport:
                     self._on_clock_synced(self._clock_offset_ms)
                 except Exception as e:
                     logger.debug("on_clock_synced callback raised: %s", e)
-
-        # The gateway may return a different source_id if the desired name
-        # was already claimed by another install — adopt the assigned value
-        # so all subsequent frames (heartbeats, future reconnects) use it.
-        assigned = msg.get("source_id")
-        if isinstance(assigned, str) and assigned and assigned != self.source_id:
-            logger.info(
-                "plexus ws source_id auto-suffixed: requested=%s assigned=%s",
-                desired_source_id, assigned,
-            )
-            self.source_id = assigned
-            if self._on_source_id_assigned is not None:
-                try:
-                    self._on_source_id_assigned(assigned)
-                except Exception as e:  # pragma: no cover - callback errors must not break auth
-                    logger.debug("on_source_id_assigned callback raised: %s", e)
 
         was_reconnect = self._backoff_attempt > 0
         self._authenticated.set()

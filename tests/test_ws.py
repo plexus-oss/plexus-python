@@ -126,7 +126,6 @@ def test_auth_handshake_and_telemetry(gateway):
         api_key="plx_test_abc",
         source_id="drone-001",
         ws_url=_url(gateway.port),
-        install_id="install-A",
         agent_version="9.9.9",
     )
     t.start()
@@ -137,7 +136,7 @@ def test_auth_handshake_and_telemetry(gateway):
         assert gateway.auth_frame["type"] == "device_auth"
         assert gateway.auth_frame["api_key"] == "plx_test_abc"
         assert gateway.auth_frame["source_id"] == "drone-001"
-        assert gateway.auth_frame["install_id"] == "install-A"
+        assert "install_id" not in gateway.auth_frame
         assert gateway.auth_frame["platform"] == "python-sdk"
         assert gateway.auth_frame["agent_version"] == "9.9.9"
         # commands is omitted when none registered
@@ -254,78 +253,6 @@ def test_handler_exception_returns_error(gateway):
         assert err["error"] == "boom"
     finally:
         t.stop()
-
-
-def test_install_id_omitted_when_empty():
-    # Default install_id="" should not leak an empty install_id field into
-    # the auth frame — that keeps the wire shape identical for legacy SDK
-    # builds that don't set one.
-    g = _StubGateway()
-    g.start()
-    try:
-        t = WebSocketTransport(
-            api_key="plx_test_abc",
-            source_id="drone-001",
-            ws_url=_url(g.port),
-        )
-        t.start()
-        try:
-            assert t.wait_authenticated(timeout=3)
-            assert "install_id" not in g.auth_frame
-        finally:
-            t.stop()
-    finally:
-        g.stop()
-
-
-def test_server_assigned_source_id_is_adopted():
-    # Simulate the auto-suffix path: SDK asks for "drone-01", the gateway
-    # returns "drone-01_2" in the authenticated frame. The transport must
-    # adopt the assigned name and fire the on_source_id_assigned callback.
-    g = _StubGateway(assigned_source_id="drone-01_2")
-    g.start()
-    try:
-        seen: List[str] = []
-        t = WebSocketTransport(
-            api_key="plx_test_abc",
-            source_id="drone-01",
-            ws_url=_url(g.port),
-            install_id="install-B",
-            on_source_id_assigned=lambda s: seen.append(s),
-        )
-        t.start()
-        try:
-            assert t.wait_authenticated(timeout=3)
-            assert t.source_id == "drone-01_2"
-            assert seen == ["drone-01_2"]
-        finally:
-            t.stop()
-    finally:
-        g.stop()
-
-
-def test_same_assigned_source_id_does_not_fire_callback():
-    # Happy path — gateway returns the same name. No callback, source_id unchanged.
-    g = _StubGateway()  # echoes whatever was sent
-    g.start()
-    try:
-        seen: List[str] = []
-        t = WebSocketTransport(
-            api_key="plx_test_abc",
-            source_id="drone-01",
-            ws_url=_url(g.port),
-            install_id="install-A",
-            on_source_id_assigned=lambda s: seen.append(s),
-        )
-        t.start()
-        try:
-            assert t.wait_authenticated(timeout=3)
-            assert t.source_id == "drone-01"
-            assert seen == []
-        finally:
-            t.stop()
-    finally:
-        g.stop()
 
 
 def test_ensure_device_path():

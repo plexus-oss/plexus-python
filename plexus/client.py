@@ -55,9 +55,7 @@ from plexus.config import (
     get_endpoint,
     get_gateway_url,
     get_gateway_ws_url,
-    get_install_id,
     get_source_id,
-    set_source_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -414,9 +412,7 @@ class Plexus:
             api_key=self.api_key,
             source_id=self.source_id,
             ws_url=self._ws_url,
-            install_id=get_install_id(),
             agent_version=__version__,
-            on_source_id_assigned=self._on_source_id_assigned,
             on_clock_synced=self._on_clock_synced,
         )
         self._ws.start()
@@ -427,16 +423,6 @@ class Plexus:
 
     def _on_clock_synced(self, offset_ms: int) -> None:
         self._clock_offset_ms = offset_ms
-
-    def _on_source_id_assigned(self, assigned: str) -> None:
-        """Callback from WebSocketTransport when the gateway returns an
-        auto-suffixed source_id. Persists it so subsequent runs (and the HTTP
-        fallback path in this process) use the assigned name directly."""
-        self.source_id = assigned
-        try:
-            set_source_id(assigned)
-        except Exception as e:  # pragma: no cover - persistence failure is non-fatal
-            logger.debug("failed to persist assigned source_id: %s", e)
 
     def _encode_frame(self, frame, quality: int) -> Tuple[bytes, int, int]:
         """Normalize any supported frame type to (jpeg_bytes, width, height).
