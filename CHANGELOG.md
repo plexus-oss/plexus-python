@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.3] - 2026-06-02 - Remove install_id / source_id auto-suffix
+
+### Changed
+
+- Removed `install_id` from the device auth frame and `WebSocketTransport`.
+- Removed server-side source_id auto-suffix handling (`on_source_id_assigned` callback, `set_source_id` persistence).
+- Removed `get_install_id` and `set_source_id` from `plexus.config`.
+
 ## [0.7.0] - 2026-05-29 - SDK hardening
 
 ### Fixed
