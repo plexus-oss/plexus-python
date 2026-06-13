@@ -30,7 +30,7 @@ Then control streaming, recording, and configuration from [app.plexus.company/de
 Send data directly via HTTP:
 
 ```bash
-curl -X POST https://plexus-gateway.fly.dev/ingest \
+curl -X POST https://gateway.plexus.company/ingest \
   -H "x-api-key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -94,14 +94,14 @@ x-api-key: plx_xxxxx
 }
 ```
 
-| Field        | Type   | Required | Description                                    |
-| ------------ | ------ | -------- | ---------------------------------------------- |
-| `metric`     | string | Yes      | Metric name (e.g., `temperature`, `motor.rpm`) |
-| `value`      | any    | Yes      | See supported value types below                |
+| Field        | Type   | Required | Description                                                                                                                                                                                             |
+| ------------ | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `metric`     | string | Yes      | Metric name (e.g., `temperature`, `motor.rpm`)                                                                                                                                                          |
+| `value`      | any    | Yes      | See supported value types below                                                                                                                                                                         |
 | `timestamp`  | float  | No       | Unix timestamp in seconds (or ms if ≥ 1e12). Omit to use device time. Over WebSocket, the Python SDK applies a server-synced clock correction when omitted — see [Clock correction](#clock-correction). |
-| `source_id`  | string | Yes      | Your source identifier                         |
-| `tags`       | object | No       | Key-value labels                               |
-| `session_id` | string | No       | Group data into sessions                       |
+| `source_id`  | string | Yes      | Your source identifier                                                                                                                                                                                  |
+| `tags`       | object | No       | Key-value labels                                                                                                                                                                                        |
+| `session_id` | string | No       | Group data into sessions                                                                                                                                                                                |
 
 ### Supported Value Types
 
@@ -152,7 +152,7 @@ For real-time UI-controlled streaming, devices connect via WebSocket.
 
 ### Device Authentication
 
-Devices authenticate using an API key. The `source_id` in the request is the device's *desired* name; the server may return a different, auto-suffixed name in the `authenticated` frame if the desired name is already claimed by another device (see [Device identity](../README.md#device-identity) in the README).
+Devices authenticate using an API key. The `source_id` in the request is the device's _desired_ name; the server may return a different, auto-suffixed name in the `authenticated` frame if the desired name is already claimed by another device (see [Device identity](../README.md#device-identity) in the README).
 
 ```json
 // Device → Server
@@ -286,7 +286,7 @@ import requests
 import time
 
 requests.post(
-    "https://plexus-gateway.fly.dev/ingest",
+    "https://gateway.plexus.company/ingest",
     headers={"x-api-key": "plx_xxxxx"},
     json={
         "points": [{
@@ -302,7 +302,7 @@ requests.post(
 ### JavaScript
 
 ```javascript
-await fetch("https://plexus-gateway.fly.dev/ingest", {
+await fetch("https://gateway.plexus.company/ingest", {
   method: "POST",
   headers: {
     "x-api-key": "plx_xxxxx",
@@ -344,7 +344,7 @@ func main() {
     }
 
     body, _ := json.Marshal(points)
-    req, _ := http.NewRequest("POST", "https://plexus-gateway.fly.dev/ingest", bytes.NewBuffer(body))
+    req, _ := http.NewRequest("POST", "https://gateway.plexus.company/ingest", bytes.NewBuffer(body))
     req.Header.Set("x-api-key", "plx_xxxxx")
     req.Header.Set("Content-Type", "application/json")
 
@@ -363,7 +363,7 @@ func main() {
 // field entirely if you cannot guarantee NTP sync at send time.
 void sendToPlexus(const char* metric, float value) {
     HTTPClient http;
-    http.begin("https://plexus-gateway.fly.dev/ingest");
+    http.begin("https://gateway.plexus.company/ingest");
     http.addHeader("Content-Type", "application/json");
     http.addHeader("x-api-key", "plx_xxxxx");
 
@@ -386,7 +386,7 @@ void sendToPlexus(const char* metric, float value) {
 API_KEY="plx_xxxxx"
 SOURCE_ID="sensor-001"
 
-curl -X POST https://plexus-gateway.fly.dev/ingest \
+curl -X POST https://gateway.plexus.company/ingest \
   -H "x-api-key: $API_KEY" \
   -H "Content-Type: application/json" \
   -d "{
@@ -492,15 +492,18 @@ px.send("temperature", 72.5, timestamp=t)        # your timestamp → used as-is
 ```
 
 **When to pass an explicit timestamp:**
+
 - You have a reliable wall-clock source (GPS, trusted hardware RTC, host NTP)
 - You are replaying or backfilling historical data
 - Your sensor provides its own wall-clock timestamp
 
 **When to omit timestamp:**
+
 - The device may have booted without NTP (Raspberry Pi, Jetson, field robots without network on first boot)
 - You have no reliable external time source
 
 **Known limitations:**
+
 - The clock offset refreshes only on WebSocket reconnect. A device with a drifting RTC that stays connected for many days will accumulate uncorrected drift between reconnects proportional to the drift rate.
 - HTTP transport (`transport="http"`) does not receive clock sync — timestamps default to the device clock uncorrected.
 - `send_batch()` takes one shared `timestamp` for the whole batch, not per-point. For per-point timestamps, call `send()` in a loop.

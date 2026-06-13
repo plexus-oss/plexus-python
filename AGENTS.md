@@ -7,8 +7,8 @@ Machine-readable interface for AI assistants and automation scripts.
 | Variable                | Description                           | Default                          |
 | ----------------------- | ------------------------------------- | -------------------------------- |
 | `PLEXUS_API_KEY`        | API key for authentication (required) | none                             |
-| `PLEXUS_GATEWAY_URL`    | Gateway HTTP ingest URL               | `https://plexus-gateway.fly.dev` |
-| `PLEXUS_GATEWAY_WS_URL` | Gateway WebSocket URL                 | `wss://plexus-gateway.fly.dev`   |
+| `PLEXUS_GATEWAY_URL`    | Gateway HTTP ingest URL               | `https://gateway.plexus.company` |
+| `PLEXUS_GATEWAY_WS_URL` | Gateway WebSocket URL                 | `wss://gateway.plexus.company`   |
 
 ## CLI Commands
 

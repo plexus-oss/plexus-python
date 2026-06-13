@@ -184,7 +184,7 @@
 
 ### Changed
 
-- Gateway WebSocket URL (`wss://plexus-gateway.fly.dev`) is now the SDK
+- Gateway WebSocket URL (`wss://gateway.plexus.company`) is now the SDK
   default — no need to pass `ws_url` explicitly.
 - Removed the `[plexus]   endpoint: …` line from the connection printout.
 
@@ -342,7 +342,7 @@ Breaking. `plexus-python` is now just the thin client — no agent, adapters, se
 
 ### Changed
 
-- Default ingest endpoint points directly at the Plexus gateway (`https://plexus-gateway.fly.dev/ingest`), not the Next.js app proxy
+- Default ingest endpoint points directly at the Plexus gateway (`https://gateway.plexus.company/ingest`), not the Next.js app proxy
 - Client raises `ValueError` clearly when no API key is available, instead of invoking a login flow
 
 ## [0.1.0] - Initial release

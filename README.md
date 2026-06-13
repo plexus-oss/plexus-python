@@ -233,8 +233,8 @@ The SDK sends an `ack` frame before invoking the handler, then a `result` frame 
 | Variable                | Description                  | Default                          |
 | ----------------------- | ---------------------------- | -------------------------------- |
 | `PLEXUS_API_KEY`        | API key (required)           | none                             |
-| `PLEXUS_GATEWAY_URL`    | HTTP ingest URL              | `https://plexus-gateway.fly.dev` |
-| `PLEXUS_GATEWAY_WS_URL` | WebSocket URL              | `wss://plexus-gateway.fly.dev`   |
+| `PLEXUS_GATEWAY_URL`    | HTTP ingest URL              | `https://gateway.plexus.company` |
+| `PLEXUS_GATEWAY_WS_URL` | WebSocket URL              | `wss://gateway.plexus.company`   |
 
 ## Architecture
 

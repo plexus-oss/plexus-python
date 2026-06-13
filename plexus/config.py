@@ -49,8 +49,8 @@ CONFIG_DIR = Path.home() / ".plexus"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 PLEXUS_ENDPOINT = "https://app.plexus.company"
-PLEXUS_GATEWAY_URL = "https://plexus-gateway.fly.dev"
-PLEXUS_GATEWAY_WS_URL = "wss://plexus-gateway.fly.dev"
+PLEXUS_GATEWAY_URL = "https://gateway.plexus.company"
+PLEXUS_GATEWAY_WS_URL = "wss://gateway.plexus.company"
 
 DEFAULT_CONFIG = {
     "api_key": None,
