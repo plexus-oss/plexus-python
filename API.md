@@ -430,8 +430,6 @@ while True:
         px.send("attitude.pitch", msg.pitch)
 ```
 
-See [docs.plexus.dev/recipes](https://docs.plexus.dev/recipes) for more.
-
 ## Python SDK with Sensor Drivers
 
 For Raspberry Pi and other Linux devices, the Python SDK includes sensor drivers:

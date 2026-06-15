@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
-    { name = "Plexus", email = "hello@plexus.dev" }
+    { name = "Plexus", email = "info@plexus.company" }
 ]
 keywords = ["telemetry", "iot", "hardware", "observability", "fleet", "monitoring"]
 classifiers = [
@@ -41,8 +41,8 @@ dev = ["pytest>=9.0.3", "pytest-cov", "ruff", "websockets>=12", "opencv-python-h
 plexus = "plexus.cli:main"
 
 [project.urls]
-Homepage = "https://plexus.dev"
-Documentation = "https://docs.plexus.dev"
+Homepage = "https://plexus.company"
+Documentation = "https://docs.plexus.company"
 Repository = "https://github.com/plexus-oss/plexus-python"
 Issues = "https://github.com/plexus-oss/plexus-python/issues"
 
