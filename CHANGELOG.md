@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.0] - 2026-07-02 - Command concurrency control
+
+### Added
+
+- `concurrency` option on `on_command()` / `register_command()`. Defaults to `"accept"`
+  (unchanged behavior — overlapping invocations run concurrently). Set `"reject"` to refuse a
+  new invocation with an error result (`command already in progress: <name>`) while a previous
+  invocation of the same command is still running. Use it for handlers that drive exclusive
+  hardware (e.g. a pump init) so a client retry or double-click can't start two at once.
+  Protection is per command name; the immediate ack is still sent before the handler runs.
+
 ## [0.7.1] - 2026-06-02 - Remove install_id / source_id auto-suffix
 
 ### Changed

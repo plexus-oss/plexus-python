@@ -62,6 +62,11 @@ class _RegisteredCommand:
     handler: CommandHandler
     description: Optional[str] = None
     params: List[Dict[str, Any]] = field(default_factory=list)
+    # "accept" (default): run overlapping invocations concurrently.
+    # "reject": refuse a new invocation with an error result while a
+    # previous one of the same command is still running.
+    concurrency: str = "accept"
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def to_manifest(self) -> Dict[str, Any]:
         m: Dict[str, Any] = {"name": self.name}
@@ -127,11 +132,24 @@ class WebSocketTransport:
         *,
         description: Optional[str] = None,
         params: Optional[List[Dict[str, Any]]] = None,
+        concurrency: str = "accept",
     ) -> None:
         """Register a command handler. Must be called before start() to be
-        advertised in the auth frame."""
+        advertised in the auth frame.
+
+        concurrency controls what happens when a command arrives while a
+        previous invocation of the *same* command is still running:
+            "accept" (default) — run it concurrently on a new thread.
+            "reject"           — refuse it with an error result until the
+                                 in-flight invocation finishes.
+        """
+        if concurrency not in ("accept", "reject"):
+            raise ValueError(
+                f"concurrency must be 'accept' or 'reject', got {concurrency!r}"
+            )
         self._commands[name] = _RegisteredCommand(
-            name=name, handler=handler, description=description, params=params or []
+            name=name, handler=handler, description=description,
+            params=params or [], concurrency=concurrency,
         )
 
     def start(self) -> None:
@@ -371,13 +389,42 @@ class WebSocketTransport:
             })
             return
 
+        # concurrency="reject": if an invocation is already running, refuse
+        # this one immediately rather than starting a second in parallel.
+        holds_lock = False
+        if reg.concurrency == "reject":
+            if not reg._lock.acquire(blocking=False):
+                self._send_frame({
+                    "type": "command_result",
+                    "id": cmd_id,
+                    "command": command,
+                    "event": "error",
+                    "error": f"command already in progress: {command}",
+                })
+                return
+            holds_lock = True
+
         # Run the handler off the read-loop thread so a slow handler doesn't
         # block heartbeats or other inbound frames.
-        threading.Thread(
-            target=self._run_handler,
-            args=(reg, cmd_id, command, params),
-            daemon=True,
-        ).start()
+        try:
+            threading.Thread(
+                target=self._run_handler,
+                args=(reg, cmd_id, command, params, holds_lock),
+                daemon=True,
+            ).start()
+        except Exception as e:
+            # Thread creation failed (e.g. resource exhaustion). Release the
+            # concurrency lock so the command isn't wedged as "in progress",
+            # and report the failure rather than leaving it silently un-acked.
+            if holds_lock:
+                reg._lock.release()
+            self._send_frame({
+                "type": "command_result",
+                "id": cmd_id,
+                "command": command,
+                "event": "error",
+                "error": f"failed to start command handler: {e}",
+            })
 
     def _run_handler(
         self,
@@ -385,6 +432,7 @@ class WebSocketTransport:
         cmd_id: str,
         command: str,
         params: Dict[str, Any],
+        holds_lock: bool = False,
     ) -> None:
         try:
             result = reg.handler(command, params)
@@ -397,6 +445,11 @@ class WebSocketTransport:
                 "error": str(e),
             })
             return
+        finally:
+            # Release the concurrency lock (if held) as soon as the handler
+            # returns, regardless of success or failure.
+            if holds_lock:
+                reg._lock.release()
         self._send_frame({
             "type": "command_result",
             "id": cmd_id,

@@ -686,6 +686,7 @@ class Plexus:
         *,
         description: Optional[str] = None,
         params: Optional[List[Dict[str, Any]]] = None,
+        concurrency: str = "accept",
     ) -> None:
         """Register a command handler (WebSocket transport only).
 
@@ -695,6 +696,12 @@ class Plexus:
 
         Must be called before the first send() so the command is advertised
         in the auth frame.
+
+        concurrency: "accept" (default) runs overlapping invocations of the
+            same command concurrently; "reject" refuses a new invocation with
+            an error result while a previous one is still running. Use
+            "reject" for handlers that drive exclusive hardware (e.g. a pump
+            init) so a retry or double-click can't start two at once.
         """
         ws = self._ensure_ws()
         if ws.is_authenticated:
@@ -704,7 +711,10 @@ class Plexus:
                 "Call on_command() before the first send().",
                 name,
             )
-        ws.register_command(name, handler, description=description, params=params)
+        ws.register_command(
+            name, handler, description=description, params=params,
+            concurrency=concurrency,
+        )
 
     def _send_points(self, points: List[Dict[str, Any]]) -> bool:
         """Send data points to the gateway with retry and buffering.

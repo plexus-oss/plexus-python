@@ -255,6 +255,135 @@ def test_handler_exception_returns_error(gateway):
         t.stop()
 
 
+def test_reject_concurrency_refuses_overlap(gateway):
+    release = threading.Event()
+    started = threading.Event()
+
+    def slow(name, params):
+        started.set()
+        release.wait(timeout=3)
+        return {"done": True}
+
+    t = WebSocketTransport(
+        api_key="plx_test_abc",
+        source_id="drone-001",
+        ws_url=_url(gateway.port),
+    )
+    t.register_command("init", slow, concurrency="reject")
+    t.start()
+    try:
+        assert t.wait_authenticated(timeout=3)
+
+        # First invocation starts and blocks inside the handler.
+        gateway.send_command_sync("cmd-1", "init", {})
+        assert started.wait(timeout=3)
+
+        # Second invocation arrives while the first is still running.
+        gateway.send_command_sync("cmd-2", "init", {})
+
+        # cmd-2 is acked, then rejected with an error — the handler never runs
+        # a second time.
+        assert _wait_until(lambda: any(
+            m.get("type") == "command_result"
+            and m.get("id") == "cmd-2"
+            and m.get("event") == "error"
+            for m in gateway.received
+        ))
+        err = next(
+            m for m in gateway.received
+            if m.get("type") == "command_result"
+            and m.get("id") == "cmd-2" and m.get("event") == "error"
+        )
+        assert "already in progress" in err["error"]
+
+        # Let the first finish; it still returns its result normally.
+        release.set()
+        assert _wait_until(lambda: any(
+            m.get("type") == "command_result"
+            and m.get("id") == "cmd-1" and m.get("event") == "result"
+            for m in gateway.received
+        ))
+
+        # A fresh invocation after the first completes is accepted again.
+        gateway.send_command_sync("cmd-3", "init", {})
+        assert _wait_until(lambda: any(
+            m.get("type") == "command_result"
+            and m.get("id") == "cmd-3" and m.get("event") == "result"
+            for m in gateway.received
+        ))
+    finally:
+        release.set()
+        t.stop()
+
+
+def test_accept_concurrency_allows_overlap(gateway):
+    release = threading.Event()
+    active = []
+    lock = threading.Lock()
+
+    def slow(name, params):
+        with lock:
+            active.append(1)
+        release.wait(timeout=3)
+        return {"done": True}
+
+    t = WebSocketTransport(
+        api_key="plx_test_abc",
+        source_id="drone-001",
+        ws_url=_url(gateway.port),
+    )
+    # Default concurrency is "accept".
+    t.register_command("init", slow)
+    t.start()
+    try:
+        assert t.wait_authenticated(timeout=3)
+        gateway.send_command_sync("cmd-1", "init", {})
+        gateway.send_command_sync("cmd-2", "init", {})
+        # Both handlers run at the same time (neither has returned yet).
+        assert _wait_until(lambda: len(active) == 2)
+    finally:
+        release.set()
+        t.stop()
+
+
+def test_reject_releases_lock_if_thread_start_fails(monkeypatch):
+    import plexus.ws as wsmod
+
+    t = WebSocketTransport(
+        api_key="plx_test_abc",
+        source_id="drone-001",
+        ws_url="ws://127.0.0.1:1",
+    )
+    t.register_command("init", lambda n, p: None, concurrency="reject")
+
+    class _BoomThread:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            raise RuntimeError("cannot start thread")
+
+    monkeypatch.setattr(wsmod.threading, "Thread", _BoomThread)
+
+    # Dispatch directly (no socket needed; _send_frame no-ops while _ws is None).
+    # The failed thread start must not leave the concurrency lock held.
+    t._handle_command({"id": "cmd-1", "command": "init", "params": {}})
+
+    reg = t._commands["init"]
+    assert reg._lock.acquire(blocking=False), "lock leaked after thread start failure"
+    reg._lock.release()
+
+
+def test_register_command_rejects_bad_concurrency(gateway):
+    t = WebSocketTransport(
+        api_key="plx_test_abc",
+        source_id="drone-001",
+        ws_url=_url(gateway.port),
+    )
+    with pytest.raises(ValueError, match="concurrency"):
+        t.register_command("x", lambda n, p: None, concurrency="bogus")
+
+
 def test_ensure_device_path():
     from plexus.ws import _ensure_device_path
     assert _ensure_device_path("wss://foo") == "wss://foo/ws/device"
