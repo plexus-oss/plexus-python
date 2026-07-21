@@ -5,14 +5,13 @@ Wire-compatible with the C SDK (`plexus_ws.c`). Targets the gateway's
 `/ws/device` endpoint and exchanges the same JSON frames:
 
     client → {"type": "device_auth", "api_key": ..., "source_id": ...,
-              "install_id": ..., "platform": "python-sdk",
-              "agent_version": ..., "commands": [...]}
-    server → {"type": "authenticated", "source_id": ...}
+              "platform": "python-sdk", "agent_version": ...,
+              "commands": [...]}
+    server → {"type": "authenticated", "source_id": ..., "server_time_ms": ...}
 
-The server-returned `source_id` in the `authenticated` frame is
-authoritative: if the gateway auto-suffixed on a collision (e.g. the
-desired name was already claimed by a different install_id), the
-client's `source_id` is updated in place to match.
+The gateway echoes the declared `source_id` back unchanged; the client
+uses the `authenticated` frame only for the `server_time_ms` clock sync.
+(install_id and server-side source_id auto-suffixing were removed in 0.7.1.)
     client → {"type": "telemetry", "points": [...]}
     client → {"type": "heartbeat", "source_id": ..., "agent_version": ...}   # every 30s
     server → {"type": "typed_command", "id": ..., "command": ..., "params": {...}}

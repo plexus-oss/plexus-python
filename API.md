@@ -55,8 +55,8 @@ Plexus uses API keys for all authentication:
 
 **Option A: CLI setup (recommended for devices)**
 
-1. Run `plexus start` on your device
-2. Sign up or sign in directly in the terminal
+1. Run `plexus init` on your device
+2. Authorize the machine in the browser tab it opens
 3. API key is saved to `~/.plexus/config.json`
 
 **Option B: Manual creation**
@@ -77,7 +77,7 @@ x-api-key: plx_xxxxx
 
 ### Send Data
 
-**POST** `/api/ingest`
+**POST** `https://gateway.plexus.company/ingest`
 
 ```json
 {
@@ -87,8 +87,7 @@ x-api-key: plx_xxxxx
       "value": 72.5,
       "timestamp": 1699900000.123,
       "source_id": "sensor-001",
-      "tags": { "location": "lab" },
-      "session_id": "test-001"
+      "tags": { "location": "lab" }
     }
   ]
 }
@@ -101,7 +100,6 @@ x-api-key: plx_xxxxx
 | `timestamp`  | float  | No       | Unix timestamp in seconds (or ms if ≥ 1e12). Omit to use device time. Over WebSocket, the Python SDK applies a server-synced clock correction when omitted — see [Clock correction](#clock-correction). |
 | `source_id`  | string | Yes      | Your source identifier                                                                                                                                                                                  |
 | `tags`       | object | No       | Key-value labels                                                                                                                                                                                        |
-| `session_id` | string | No       | Group data into sessions                                                                                                                                                                                |
 
 ### Supported Value Types
 
@@ -115,29 +113,7 @@ x-api-key: plx_xxxxx
 
 ### Sessions
 
-Group related data for analysis and playback.
-
-**Create session:**
-
-```json
-POST /api/sessions
-{
-  "session_id": "test-001",
-  "name": "Motor Test Run",
-  "source_id": "sensor-001",
-  "status": "active"
-}
-```
-
-**End session:**
-
-```json
-PATCH /api/sessions/{session_id}
-{
-  "status": "completed",
-  "ended_at": "2024-01-15T10:30:00Z"
-}
-```
+> **Removed / not built.** There is no sessions REST API (`POST /api/sessions`, `PATCH /api/sessions/{id}`) — no such route exists in the gateway or platform. To group a slice of data, use the SDK's `run()` context (which tags points with a `run_id`) or plain `tags` on each point.
 
 ## WebSocket API
 
@@ -146,13 +122,13 @@ For real-time UI-controlled streaming, devices connect via WebSocket.
 ### Connection Flow
 
 1. Device connects to the gateway
-2. Device authenticates with API key
-3. Device reports available sensors
-4. Dashboard controls streaming via messages
+2. Device authenticates with API key (and advertises any registered commands)
+3. Device streams `telemetry` frames
+4. Dashboard/API invokes registered commands via `typed_command`
 
 ### Device Authentication
 
-Devices authenticate using an API key. The `source_id` in the request is the device's _desired_ name; the server may return a different, auto-suffixed name in the `authenticated` frame if the desired name is already claimed by another device (see [Device identity](../README.md#device-identity) in the README).
+Devices authenticate using an API key. The gateway echoes the declared `source_id` back unchanged — there is no auto-suffixing, so pick a unique `source_id` per device.
 
 ```json
 // Device → Server
@@ -160,9 +136,8 @@ Devices authenticate using an API key. The `source_id` in the request is the dev
   "type": "device_auth",
   "api_key": "plx_xxxxx",
   "source_id": "drone-01",
-  "install_id": "c9f2e0b46f4a4f6a8c3e1d5b0a2e7f91",
   "platform": "python-sdk",
-  "agent_version": "0.3.1"
+  "agent_version": "0.8.0"
 }
 
 // Server → Device
@@ -171,53 +146,34 @@ Devices authenticate using an API key. The `source_id` in the request is the dev
   "source_id": "drone-01",
   "server_time_ms": 1746100800000
 }
-
-// Server → Device (collision case)
-{
-  "type": "authenticated",
-  "source_id": "drone-01_2",
-  "server_time_ms": 1746100800000
-}
 ```
-
-The SDK **adopts** whatever `source_id` the server returns and uses it for all subsequent frames, heartbeats, and reconnects. It also persists the assigned name locally so reconnects go straight to the claimed slot.
 
 `server_time_ms` is the gateway's current Unix time in milliseconds. The Python SDK uses it to compute a clock offset (`server_time - device_time`) that is applied to every SDK-generated timestamp for the lifetime of the connection. This corrects for devices that boot without NTP or have an unreliable RTC — a common condition on embedded Linux. See [Clock correction](#clock-correction) for details and limitations.
 
-`install_id` is a stable per-installation UUID, generated on the device's first run and saved to `~/.plexus/config.json`. It lets the server distinguish a rebooting device from a new device trying to claim an existing name. Legacy SDKs that omit `install_id` continue to work as before (the server passes the declared `source_id` through unchanged).
+> **Removed:** `install_id` and server-side `source_id` auto-suffixing were removed in 0.7.1. The device_auth frame no longer carries an `install_id`, and the client does not adopt or persist a server-assigned name.
 
-### Message Types (Dashboard → Device)
+### Frame Types
 
-| Type            | Description                          |
-| --------------- | ------------------------------------ |
-| `start_stream`  | Start streaming sensor data          |
-| `stop_stream`   | Stop streaming                       |
-| `start_session` | Start recording to a session         |
-| `stop_session`  | Stop recording                       |
-| `configure`     | Configure sensor (e.g., sample rate) |
-| `ping`          | Keepalive request                    |
+**Device → Server**
 
-### Message Types (Device → Dashboard)
+| Type             | Description                                     |
+| ---------------- | ----------------------------------------------- |
+| `device_auth`    | Authenticate on connect (see above)             |
+| `telemetry`      | Sensor data points                              |
+| `heartbeat`      | Liveness ping (every 30s)                       |
+| `command_result` | `ack` / `result` / `error` for a typed command  |
 
-| Type              | Description             |
-| ----------------- | ----------------------- |
-| `telemetry`       | Sensor data points      |
-| `session_started` | Confirm session started |
-| `session_stopped` | Confirm session stopped |
-| `pong`            | Keepalive response      |
+**Server → Device**
 
-### Start Streaming
+| Type            | Description                                            |
+| --------------- | ----------------------------------------------------- |
+| `authenticated` | Auth accepted; carries `server_time_ms`               |
+| `typed_command` | Invoke a command the device registered via `on_command` |
+
+### Telemetry
 
 ```json
-// Dashboard → Device
-{
-  "type": "start_stream",
-  "source_id": "my-device-001",
-  "metrics": ["accel_x", "accel_y", "accel_z"],
-  "interval_ms": 100
-}
-
-// Device → Dashboard (continuous)
+// Device → Server (streamed continuously)
 {
   "type": "telemetry",
   "points": [
@@ -228,54 +184,20 @@ The SDK **adopts** whatever `source_id` the server returns and uses it for all s
 }
 ```
 
-### Start Session (Recording)
+### Commands
+
+Dashboard/API actions reach the device as a single `typed_command` envelope; the device replies with `command_result` frames. Register handlers with `px.on_command(...)` before the first `send()`.
 
 ```json
-// Dashboard → Device
-{
-  "type": "start_session",
-  "source_id": "my-device-001",
-  "session_id": "session_1699900000_abc123",
-  "session_name": "Motor Test",
-  "metrics": [],
-  "interval_ms": 100
-}
+// Server → Device
+{ "type": "typed_command", "id": "cmd-1", "command": "reboot", "params": { "delay_s": 0 } }
 
-// Device → Dashboard
-{
-  "type": "session_started",
-  "session_id": "session_1699900000_abc123",
-  "session_name": "Motor Test"
-}
-
-// Device streams telemetry with session_id tag
-{
-  "type": "telemetry",
-  "session_id": "session_1699900000_abc123",
-  "points": [
-    {
-      "metric": "accel_x",
-      "value": 0.12,
-      "timestamp": 1699900000123,
-      "tags": { "session_id": "session_1699900000_abc123" }
-    }
-  ]
-}
+// Device → Server (ack, then result or error)
+{ "type": "command_result", "id": "cmd-1", "command": "reboot", "event": "ack" }
+{ "type": "command_result", "id": "cmd-1", "command": "reboot", "event": "result", "result": { "ok": true } }
 ```
 
-### Configure Sensor
-
-```json
-// Dashboard → Device
-{
-  "type": "configure",
-  "source_id": "my-device-001",
-  "sensor": "MPU6050",
-  "config": {
-    "sample_rate": 50
-  }
-}
-```
+> **Removed / not built.** There are no raw `start_stream`, `stop_stream`, `start_session`, `stop_session`, `configure`, `session_started`, or `session_stopped` frames — the earlier agent-style streaming/recording protocol was removed. Dashboard-driven control now flows through the `typed_command` envelope above.
 
 ## Code Examples
 
@@ -432,36 +354,7 @@ while True:
 
 ## Python SDK with Sensor Drivers
 
-For Raspberry Pi and other Linux devices, the Python SDK includes sensor drivers:
-
-```bash
-pip install plexus-python[sensors]
-plexus start
-```
-
-### Supported Sensors
-
-| Sensor  | Type        | Metrics                                                       | I2C Address |
-| ------- | ----------- | ------------------------------------------------------------- | ----------- |
-| MPU6050 | 6-axis IMU  | `accel_x`, `accel_y`, `accel_z`, `gyro_x`, `gyro_y`, `gyro_z` | 0x68, 0x69  |
-| MPU9250 | 9-axis IMU  | `accel_x`, `accel_y`, `accel_z`, `gyro_x`, `gyro_y`, `gyro_z` | 0x68        |
-| BME280  | Environment | `temperature`, `humidity`, `pressure`                         | 0x76, 0x77  |
-
-### Custom Sensors
-
-```python
-from plexus.sensors import BaseSensor, SensorReading
-
-class MySensor(BaseSensor):
-    name = "MySensor"
-    metrics = ["voltage", "current"]
-
-    def read(self):
-        return [
-            SensorReading("voltage", read_adc(0) * 3.3),
-            SensorReading("current", read_adc(1) * 0.1),
-        ]
-```
+> **Removed / not built.** There is no `plexus-python[sensors]` extra and no `plexus.sensors` module (`BaseSensor` / `SensorReading` do not exist). The only optional extras are `[video]` and `[dev]`. This SDK stays out of your decode path — read your sensor with whatever library you already use and pass values to `px.send()` (see [Bring Your Own Protocol](#bring-your-own-protocol) above).
 
 ## Errors
 
@@ -503,8 +396,8 @@ px.send("temperature", 72.5, timestamp=t)        # your timestamp → used as-is
 **Known limitations:**
 
 - The clock offset refreshes only on WebSocket reconnect. A device with a drifting RTC that stays connected for many days will accumulate uncorrected drift between reconnects proportional to the drift rate.
-- HTTP transport (`transport="http"`) does not receive clock sync — timestamps default to the device clock uncorrected.
-- `send_batch()` takes one shared `timestamp` for the whole batch, not per-point. For per-point timestamps, call `send()` in a loop.
+- The HTTP fallback path (used when the WebSocket is unavailable) does not receive clock sync — timestamps default to the device clock uncorrected.
+- `send_batch()` takes one shared `timestamp` by default; pass `(metric, value, timestamp)` 3-tuples for per-point timestamps.
 
 ## Best Practices
 
@@ -513,4 +406,4 @@ px.send("temperature", 72.5, timestamp=t)        # your timestamp → used as-is
 - **Consistent source_id** - Use the same ID for each physical device/source
 - **Use tags** - Label data for filtering (e.g., `{"location": "lab"}`)
 - **Use sessions** - Group related data for easier analysis
-- **Prefer WebSocket** - For real-time UI-controlled devices, use `plexus start`
+- **Prefer WebSocket** - For real-time UI-controlled devices, the SDK connects over WebSocket by default

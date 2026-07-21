@@ -53,8 +53,7 @@ def main() -> None:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    px = Plexus(transport="ws")
-    px.wait_connected()
+    px = Plexus()
 
     interval = 1.0 / FPS
     frame_count = 0

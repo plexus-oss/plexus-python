@@ -13,13 +13,16 @@ Machine-readable interface for AI assistants and automation scripts.
 ## CLI Commands
 
 ```bash
-plexus start                           # Stream with PLEXUS_API_KEY env var
-plexus start --key plx_xxxxx           # Pass key inline
-plexus start --device-id my-device     # Set device identifier
-plexus reset                           # Clear config
+plexus init                            # Authorize this machine, save an API key locally (alias: login)
+plexus init --name my-key              # Label for the issued key (default: cli-<hostname>)
+plexus init --force                    # Overwrite an existing local key
+plexus logout                          # Forget the local API key
+plexus whoami                          # Show the local credential summary
 ```
 
-An API key is required — set `PLEXUS_API_KEY` or pass `--key`. There is no interactive signup; get a key at app.plexus.company/devices.
+`plexus init` opens a browser to `app.plexus.company/auth/cli`, waits for the callback, and
+persists the issued key to `~/.plexus/config.json`. Alternatively, set `PLEXUS_API_KEY` (or pass
+`api_key=` to `Plexus()`) instead of running `init`; get a key at app.plexus.company/api.
 
 ## Exit Codes
 

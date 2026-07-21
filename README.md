@@ -31,7 +31,7 @@ curl -sL https://app.plexus.company/setup | bash -s -- \
 
 The name must match `^[a-z0-9][a-z0-9_-]{1,62}$`. `setup.sh` refuses to run without `--name` (or without a TTY to prompt for one) — this is deliberate, because the previous `hostname` fallback silently merged telemetry from cloned SD-card images that all booted as `raspberrypi`.
 
-**If two devices end up requesting the same name**, the gateway auto-suffixes: the first connection gets `drone-01`, the second gets `drone-01_2`, the third `drone-01_3`, and so on. The SDK logs the rename at INFO and persists the assigned name to `~/.plexus/config.json` so the device keeps its identity across reboots. Under the hood, a per-installation UUID (`install_id`, lazily generated on first run) is what lets the gateway tell "same device reconnecting" from "different device claiming the same name."
+**Names are not auto-deduplicated.** The gateway echoes back whatever `source_id` you declare, unchanged — pick a unique name per device (that's what `--name` and `source_id=...` are for). Two devices that declare the same name write into the same source.
 
 In normal code, you usually just pass `source_id=...` explicitly to `Plexus(...)` and never have to think about it.
 
@@ -74,7 +74,7 @@ px.send_batch([
 ])
 ```
 
-`points` is a list of `(metric, value)` tuples. All points share the same timestamp (now, unless you pass `timestamp=t`). For independent timestamps per point, call `send()` in a loop instead.
+`points` is a list of `(metric, value)` tuples, or `(metric, value, timestamp)` 3-tuples when you need a per-point timestamp. Points without their own timestamp share the batch timestamp (now, unless you pass `timestamp=t`).
 
 ### `event(name, data)` — record a discrete occurrence
 
@@ -191,8 +191,8 @@ px.send("temperature", 72.5, timestamp=t)   # your timestamp, used as-is, no cor
 
 **Known limits:**
 - Clock sync refreshes on WebSocket (re)connect. A device with a drifting RTC that stays connected for many days accumulates uncorrected drift between reconnects.
-- HTTP-only transport (`transport="http"`) does not receive clock sync — timestamps default to the uncorrected device clock.
-- `send_batch()` shares one timestamp across the whole batch. For per-point timestamps, call `send()` in a loop.
+- The HTTP fallback path (used when the WebSocket is unavailable) does not receive clock sync — timestamps default to the uncorrected device clock.
+- `send_batch()` shares one timestamp across the batch by default; pass `(metric, value, timestamp)` 3-tuples for per-point timestamps.
 
 ## Transport
 
@@ -204,12 +204,11 @@ By default the SDK connects over a **WebSocket** to `/ws/device` on the gateway 
 If the socket is unavailable, sends transparently fall back to `POST /ingest` so no data is lost.
 
 ```python
-# default — ws with http fallback
+# ws with transparent http fallback — this is the only mode
 px = Plexus()
-
-# force http (legacy)
-px = Plexus(transport="http")
 ```
+
+There is no transport selector: the SDK always prefers the WebSocket and falls back to `POST /ingest` on its own when the socket is unavailable.
 
 ### Handling commands
 

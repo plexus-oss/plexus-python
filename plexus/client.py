@@ -265,13 +265,23 @@ class Plexus:
             return int(timestamp * 1000)
         return int(timestamp)
 
+    @staticmethod
+    def _infer_class(value: FlexValue) -> str:
+        """Numbers are metrics; everything else (str/bool/dict/list) is an event.
+
+        Mirrors the gateway (ingest.go inferClass) and the TypeScript SDK
+        (wire.ts inferClass). bool is a subclass of int in Python, so it must
+        be excluded explicitly or True/False would wrongly become metrics.
+        """
+        return "metric" if isinstance(value, (int, float)) and not isinstance(value, bool) else "event"
+
     def _make_point(
         self,
         metric: str,
         value: FlexValue,
         timestamp: Optional[float] = None,
         tags: Optional[Dict[str, str]] = None,
-        data_class: str = "metric",
+        data_class: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create a data point dictionary.
 
@@ -281,9 +291,27 @@ class Plexus:
             - bool: Binary flags, enabled/disabled states
             - dict: Complex objects, vectors, nested data
             - list: Arrays, coordinates, multi-value readings
+
+        When `data_class` is not given it is inferred from the value type.
+        The gateway rejects a non-numeric value on class="metric" and drops
+        the whole frame (taking buffered points with it), so inferring here —
+        and raising early on an explicit metric with a bad value — is what
+        makes the advertised flexible values actually work.
         """
+        cls = data_class if data_class is not None else self._infer_class(value)
+        if cls == "metric" and (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or value != value  # NaN
+            or value in (float("inf"), float("-inf"))
+        ):
+            raise PlexusError(
+                f'Metric "{metric}" requires a finite number value, got '
+                f'{type(value).__name__}. Pass data_class="event" for '
+                f"non-numeric values, or use px.event()."
+            )
         point = {
-            "class": data_class,
+            "class": cls,
             "metric": metric,
             "value": value,
             "timestamp": self._normalize_ts_ms(timestamp),
@@ -300,7 +328,7 @@ class Plexus:
         value: FlexValue,
         timestamp: Optional[float] = None,
         tags: Optional[Dict[str, str]] = None,
-        data_class: str = "metric",
+        data_class: Optional[str] = None,
     ) -> bool:
         """
         Send a single metric value to Plexus.
@@ -315,7 +343,9 @@ class Plexus:
                    - list: px.send("angles", [0.5, 1.2, -0.3])
             timestamp: Unix timestamp. If not provided, uses current time.
             tags: Optional key-value tags for the metric
-            data_class: Pipeline data class - "metric" (default) or "event"
+            data_class: Pipeline data class - "metric" or "event". If omitted,
+                inferred from the value type (numbers → metric, everything
+                else → event).
 
         Returns:
             True if successful

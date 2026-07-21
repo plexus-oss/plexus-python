@@ -2,7 +2,7 @@
 Plexus CLI — `plexus init` style auth, plus a few sibling commands.
 
 Designed to feel like fly.io / vercel CLIs:
-    $ pip install plexus
+    $ pip install plexus-python
     $ plexus init
     Opening browser to https://app.plexus.company/auth/cli...
     ✓ Saved API key as cli-<host>. You're set up.
