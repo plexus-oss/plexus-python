@@ -187,6 +187,13 @@ class WebSocketTransport:
         return self._authenticated.is_set()
 
     @property
+    def reconnect_pending(self) -> bool:
+        """True after a failed connect while the transport is backing off /
+        retrying. Callers should not block waiting for auth in this state —
+        no connection attempt may even be in flight."""
+        return self._backoff_attempt > 0 and not self._authenticated.is_set()
+
+    @property
     def clock_offset_ms(self) -> int:
         return self._clock_offset_ms
 

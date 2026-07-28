@@ -4,11 +4,13 @@ Machine-readable interface for AI assistants and automation scripts.
 
 ## Environment Variables
 
-| Variable                | Description                           | Default                          |
-| ----------------------- | ------------------------------------- | -------------------------------- |
-| `PLEXUS_API_KEY`        | API key for authentication (required) | none                             |
-| `PLEXUS_GATEWAY_URL`    | Gateway HTTP ingest URL               | `https://gateway.plexus.company` |
-| `PLEXUS_GATEWAY_WS_URL` | Gateway WebSocket URL                 | `wss://gateway.plexus.company`   |
+| Variable                | Description                                     | Default                          |
+| ----------------------- | ----------------------------------------------- | -------------------------------- |
+| `PLEXUS_API_KEY`        | API key for authentication (required)           | none                             |
+| `PLEXUS_GATEWAY_URL`    | Gateway HTTP ingest URL                         | `https://gateway.plexus.company` |
+| `PLEXUS_GATEWAY_WS_URL` | Gateway WebSocket URL                           | `wss://gateway.plexus.company`   |
+| `PLEXUS_ENDPOINT`       | Product app URL (runs, frame uploads, CLI auth) | `https://app.plexus.company`     |
+| `PLEXUS_QUIET`          | Set `1`/`true`/`yes` to silence `[plexus]` stderr status lines | unset (status lines on) |
 
 ## CLI Commands
 

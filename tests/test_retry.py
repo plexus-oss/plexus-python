@@ -313,6 +313,108 @@ class TestBuffering:
             assert client.buffer_size() == 0
 
 
+class TestChunkedSends:
+    """Regression tests for the >10k-point wedge: sends drain in ≤5000-point
+    chunks and a non-retryable 4xx buffers the points instead of losing them."""
+
+    @pytest.fixture
+    def client(self):
+        return Plexus(
+            api_key="test_key",
+            endpoint="http://localhost:9999",
+            ws_url="ws://127.0.0.1:9",  # unroutable — never touch prod
+            timeout=0.2,
+            retry_config=RetryConfig(max_retries=0, base_delay=0.01, jitter=False),
+            max_buffer_size=20_000,
+            persistent_buffer=False,
+        )
+
+    @staticmethod
+    def _posted_point_counts(mock_session):
+        import gzip as _gzip
+        import json as _json
+
+        counts = []
+        for call in mock_session.return_value.post.call_args_list:
+            body = call.kwargs.get("data")
+            try:
+                body = _gzip.decompress(body)
+            except Exception:
+                pass
+            counts.append(len(_json.loads(body)["points"]))
+        return counts
+
+    def test_backlog_over_10k_drains_in_chunks(self, client):
+        """A 10k backlog + new point must drain as ≤5000-point POSTs, never
+        one merged request over the gateway's 10k per-batch cap."""
+        client._buffer.add(
+            [{"metric": "m", "value": float(i), "timestamp": i} for i in range(10_000)]
+        )
+        with patch.object(client, "_get_session") as mock_session:
+            ok = MagicMock()
+            ok.status_code = 200
+            mock_session.return_value.post.return_value = ok
+
+            assert client.send("temp", 72.5) is True
+
+            counts = self._posted_point_counts(mock_session)
+            assert sum(counts) == 10_001  # nothing lost
+            assert max(counts) <= 5000  # every request under the gateway cap
+            assert client.buffer_size() == 0
+
+    def test_400_buffers_points_instead_of_losing_them(self, client):
+        """A non-retryable 400 must buffer the unsent points before raising —
+        previously they were dropped pre-buffer, wedging the backlog forever."""
+        with patch.object(client, "_get_session") as mock_session:
+            bad = MagicMock()
+            bad.status_code = 400
+            bad.text = "too many points"
+            mock_session.return_value.post.return_value = bad
+
+            with pytest.raises(PlexusError, match="Bad request"):
+                client.send("temp", 72.5)
+
+            assert client.buffer_size() == 1
+
+            # And the client recovers on the next successful send.
+            ok = MagicMock()
+            ok.status_code = 200
+            mock_session.return_value.post.return_value = ok
+            assert client.send("humidity", 45.0) is True
+            assert client.buffer_size() == 0
+
+
+class TestWsFrameSplit:
+    """The WS path must keep serialized frames under the gateway's 1MB read
+    limit before treating a local socket write as delivery."""
+
+    def test_split_respects_byte_budget_and_order(self):
+        import json as _json
+
+        from plexus.client import _WS_ENVELOPE_BYTES, _split_ws_frames
+
+        points = [
+            {"metric": "m", "value": "x" * 1000, "timestamp": i} for i in range(100)
+        ]
+        budget = 10_000
+        chunks = _split_ws_frames(points, budget)
+
+        assert len(chunks) > 1
+        # Order preserved, nothing lost
+        assert [p for c in chunks for p in c] == points
+        # Every chunk fits the budget (singletons exempt by design)
+        for chunk in chunks:
+            if len(chunk) > 1:
+                frame = _json.dumps({"type": "telemetry", "points": chunk})
+                assert len(frame.encode("utf-8")) <= budget + _WS_ENVELOPE_BYTES
+
+    def test_small_batch_single_frame(self):
+        from plexus.client import _split_ws_frames
+
+        points = [{"metric": "m", "value": 1.0, "timestamp": i} for i in range(50)]
+        assert _split_ws_frames(points, 900_000) == [points]
+
+
 class TestThreadSafety:
     """Tests for thread-safe buffer access."""
 

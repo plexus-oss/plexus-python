@@ -146,16 +146,63 @@ class AuthenticationError(PlexusError):
     pass
 
 
-_SOURCE_ID_RE = re.compile(r'^[a-z0-9][a-z0-9_-]{1,62}$')
+# The wire slug rule (gateway validate.go sourceIDPattern, max length =
+# MaxStringLen 256) — the old stricter local regex rejected dots, 1-char and
+# >63-char slugs that the gateway accepts. Uuid-shaped slugs are additionally
+# rejected (TypeScript SDK parity): the Plexus app resolves uuid-shaped refs
+# as internal ids, which would make such a source unreachable.
+_SOURCE_ID_RE = re.compile(r'^[a-z0-9][a-z0-9._-]*$')
+_SOURCE_ID_UUID_RE = re.compile(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+)
+_SOURCE_ID_MAX_LEN = 256
 
 
 def _validate_source_id(source_id: str) -> None:
-    if not _SOURCE_ID_RE.match(source_id):
+    if (
+        not source_id
+        or len(source_id) > _SOURCE_ID_MAX_LEN
+        or not _SOURCE_ID_RE.match(source_id)
+        or _SOURCE_ID_UUID_RE.match(source_id)
+    ):
         raise ValueError(
             f"Invalid source_id {source_id!r}. "
-            "Must match ^[a-z0-9][a-z0-9_-]{1,62}$ "
-            "(lowercase letters, digits, hyphens, underscores; start with letter or digit)."
+            "Must match ^[a-z0-9][a-z0-9._-]*$ (max 256 chars; lowercase "
+            "letters, digits, dots, hyphens, underscores; start with a letter "
+            "or digit) and must not look like a UUID."
         )
+
+
+# Allowance for the {"type": "telemetry", "points": [...]} envelope when
+# estimating a WS frame's serialized size from the sum of its points.
+_WS_ENVELOPE_BYTES = 64
+
+
+def _split_ws_frames(
+    points: List[Dict[str, Any]], byte_budget: int
+) -> List[List[Dict[str, Any]]]:
+    """Split points into telemetry-frame chunks under byte_budget serialized.
+
+    The gateway enforces a 1MB read limit per WebSocket message and rejects
+    oversized frames server-side — after the local socket write has already
+    "succeeded". Frame size is estimated as the sum of each point's JSON
+    serialization plus a small envelope allowance. A single point larger than
+    the budget still goes out alone (nothing more can be done client-side).
+    """
+    chunks: List[List[Dict[str, Any]]] = []
+    cur: List[Dict[str, Any]] = []
+    cur_bytes = _WS_ENVELOPE_BYTES
+    for p in points:
+        p_bytes = len(json.dumps(p).encode("utf-8")) + 1  # +1 for the comma
+        if cur and cur_bytes + p_bytes > byte_budget:
+            chunks.append(cur)
+            cur = []
+            cur_bytes = _WS_ENVELOPE_BYTES
+        cur.append(p)
+        cur_bytes += p_bytes
+    if cur:
+        chunks.append(cur)
+    return chunks
 
 
 class Plexus:
@@ -211,6 +258,7 @@ class Plexus:
 
         self._ws_url = (ws_url or get_gateway_ws_url())
         self._ws = None  # lazily constructed in _ensure_ws()
+        self._ws_auth_waited = False  # first-send auth wait paid at most once
         self._clock_offset_ms: int = 0
 
         # Pluggable buffer backend for failed sends
@@ -746,48 +794,109 @@ class Plexus:
             concurrency=concurrency,
         )
 
+    # Gateway hard limits (gateway gateway_config.go): 10k points per
+    # batch/frame and 1MB per WebSocket message. Sending in chunks well under
+    # both means a large local backlog can always drain, instead of one giant
+    # merged request drawing a non-retryable 400 that would wedge the client
+    # at exactly the buffer cap.
+    _SEND_CHUNK_POINTS = 5000
+    _WS_FRAME_BYTE_BUDGET = 900_000
+
     def _send_points(self, points: List[Dict[str, Any]]) -> bool:
         """Send data points to the gateway with retry and buffering.
 
-        Tries WebSocket first; if not yet authenticated or the socket fails,
-        falls through to HTTP POST so points still land.
+        Any locally buffered backlog is drained together with the new points
+        in chunks of at most _SEND_CHUNK_POINTS, so a request never exceeds
+        the gateway's 10k-points-per-batch limit no matter how large the
+        backlog has grown. Each chunk tries WebSocket first and falls through
+        to HTTP POST so points still land.
 
         Retry behavior (HTTP path):
         - Retries on: Timeout, ConnectionError, HTTP 429, HTTP 5xx
         - No retry on: HTTP 401/403 (auth), HTTP 400/422 (bad request)
-        - After max retries: buffers points locally for next send attempt
+        - On failure: the unsent chunk and all not-yet-sent points are
+          buffered locally for the next send attempt, then the error is
+          raised. Nothing is dropped on the floor.
         """
         if not self.api_key:
             raise AuthenticationError(
                 "No API key configured. Run 'plexus init' or set PLEXUS_API_KEY"
             )
 
-        # Include any previously buffered points
-        all_points = self._get_buffered_points() + points
-
-        # Preferred path: WebSocket.
         ws = self._ensure_ws()
-        # Brief wait on first call so startup races don't dump every point
-        # into the HTTP fallback path.
-        if not ws.is_authenticated:
+        # Brief wait on the FIRST send only, so startup races don't dump the
+        # first points into the HTTP fallback path. Waiting on every send
+        # would stall an unauthenticated client ~5s per call; once the wait
+        # has been paid — or a reconnect backoff is already pending — sends
+        # proceed immediately and use HTTP until the socket authenticates.
+        if (
+            not ws.is_authenticated
+            and not self._ws_auth_waited
+            and not ws.reconnect_pending
+        ):
+            self._ws_auth_waited = True
             ws.wait_authenticated(timeout=min(self.timeout, 5.0))
-        if ws.send_points(all_points):
-            self._clear_buffer()
-            self._note_send(len(all_points), via="ws")
-            return True
+
+        pending_new = list(points)
+        while True:
+            # Oldest buffered points first, topped up with new points — the
+            # common no-backlog case still goes out as a single request.
+            batch, _remaining = self._buffer.drain(self._SEND_CHUNK_POINTS)
+            if len(batch) < self._SEND_CHUNK_POINTS and pending_new:
+                take = self._SEND_CHUNK_POINTS - len(batch)
+                batch.extend(pending_new[:take])
+                pending_new = pending_new[take:]
+            if not batch:
+                return True
+            try:
+                self._send_chunk(ws, batch)
+            except Exception:
+                # The chunk did not land (drain() already removed it from the
+                # buffer) — put it back along with every not-yet-sent point so
+                # nothing is lost, then surface the error.
+                self._add_to_buffer(batch)
+                if pending_new:
+                    self._add_to_buffer(pending_new)
+                if not self._announced_buffering:
+                    _say(
+                        f"⏸ Send failed, buffering points locally "
+                        f"({self.buffer_size()} queued). Will retry on next call."
+                    )
+                    self._announced_buffering = True
+                raise
+
+    def _send_chunk(self, ws, points: List[Dict[str, Any]]) -> None:
+        """Send one bounded chunk (≤ _SEND_CHUNK_POINTS). Raises on failure.
+
+        WebSocket preferred. A ws.send_points() True only confirms the frame
+        reached the local socket — the gateway silently drops frames over its
+        1MB read limit server-side — so chunks are sub-split to stay under
+        _WS_FRAME_BYTE_BUDGET before being treated as delivered. If the
+        socket fails partway through, the whole chunk falls back to HTTP:
+        at-least-once delivery, duplicates preferred over loss.
+        """
+        if ws is not None and ws.is_authenticated:
+            subframes = _split_ws_frames(points, self._WS_FRAME_BYTE_BUDGET)
+            if all(ws.send_points(sub) for sub in subframes):
+                self._note_send(len(points), via="ws")
+                return
         # Socket unavailable → fall through to HTTP.
         if not self._announced_http_fallback:
             _say(
                 f"⚠ WebSocket unavailable, falling back to POST {self.gateway_url}/ingest"
             )
             self._announced_http_fallback = True
+        self._send_http(points)
+        self._note_send(len(points), via="http")
 
+    def _send_http(self, points: List[Dict[str, Any]]) -> None:
+        """POST one chunk of points to /ingest with retries. Raises on failure."""
         url = f"{self.gateway_url}/ingest"
         last_error: Optional[Exception] = None
 
         for attempt in range(self.retry_config.max_retries + 1):
             try:
-                payload = json.dumps({"source_id": self.source_id, "points": all_points})
+                payload = json.dumps({"source_id": self.source_id, "points": points})
                 payload_bytes = payload.encode("utf-8")
 
                 # Gzip compress payloads > 1KB for bandwidth efficiency
@@ -838,11 +947,9 @@ class Plexus:
                         continue
                     break
 
-                # Success - clear the buffer and return
+                # Success
                 elif response.status_code < 400:
-                    self._clear_buffer()
-                    self._note_send(len(all_points), via="http")
-                    return True
+                    return
 
                 # Other 4xx errors - don't retry
                 else:
@@ -863,15 +970,6 @@ class Plexus:
                     time.sleep(self.retry_config.get_delay(attempt))
                     continue
                 break
-
-        # All retries failed - buffer the points for later
-        self._add_to_buffer(points)
-        if not self._announced_buffering:
-            _say(
-                f"⏸ Send failed, buffering points locally ({self.buffer_size()} queued). "
-                f"Will retry on next call."
-            )
-            self._announced_buffering = True
 
         if last_error:
             raise last_error
