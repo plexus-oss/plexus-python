@@ -9,7 +9,6 @@ import pytest
 
 from plexus.client import Plexus, read_mjpeg_frames
 
-
 # ---------------------------------------------------------------------------
 # Minimal JPEG bytes fixture (SOI + EOI, valid enough for passthrough tests)
 # ---------------------------------------------------------------------------

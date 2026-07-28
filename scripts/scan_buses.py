@@ -1,4 +1,5 @@
 from smbus2 import SMBus
+
 for bus in [0, 1, 10, 20, 21, 22]:
     try:
         s = SMBus(bus)

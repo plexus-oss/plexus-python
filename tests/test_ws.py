@@ -13,7 +13,7 @@ import asyncio
 import json
 import threading
 import time
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 
@@ -27,8 +27,8 @@ class _StubGateway:
     """Minimal gateway stub. Records every frame the client sends."""
 
     def __init__(self, assigned_source_id: str | None = None):
-        self.received: List[Dict[str, Any]] = []
-        self.auth_frame: Dict[str, Any] = {}
+        self.received: list[dict[str, Any]] = []
+        self.auth_frame: dict[str, Any] = {}
         # If set, the stub returns this value in the authenticated frame
         # regardless of what the client asked for — used to exercise the
         # auto-suffix path.
@@ -69,7 +69,7 @@ class _StubGateway:
         except websockets.ConnectionClosed:
             return
 
-    async def send_command(self, cmd_id: str, name: str, params: Dict[str, Any]):
+    async def send_command(self, cmd_id: str, name: str, params: dict[str, Any]):
         assert self._ws is not None
         await self._ws.send(json.dumps({
             "type": "typed_command",
@@ -78,7 +78,7 @@ class _StubGateway:
             "params": params,
         }))
 
-    def send_command_sync(self, cmd_id: str, name: str, params: Dict[str, Any]):
+    def send_command_sync(self, cmd_id: str, name: str, params: dict[str, Any]):
         assert self._loop is not None
         fut = asyncio.run_coroutine_threadsafe(
             self.send_command(cmd_id, name, params), self._loop
@@ -157,9 +157,9 @@ def test_auth_handshake_and_telemetry(gateway):
 
 
 def test_command_roundtrip(gateway):
-    got: Dict[str, Any] = {}
+    got: dict[str, Any] = {}
 
-    def reboot(name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    def reboot(name: str, params: dict[str, Any]) -> dict[str, Any]:
         got["name"] = name
         got["params"] = params
         return {"ok": True, "delay": params.get("delay_s")}
@@ -417,7 +417,7 @@ def test_clock_offset_computed_from_authenticated_frame():
     g = _OffsetStubGateway()
     g.start()
     try:
-        seen: List[int] = []
+        seen: list[int] = []
         t = WebSocketTransport(
             api_key="plx_test_abc",
             source_id="drone-001",

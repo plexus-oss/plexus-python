@@ -17,7 +17,8 @@ import os
 import sqlite3
 import threading
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +27,11 @@ class BufferBackend(ABC):
     """Abstract buffer backend for storing telemetry points locally."""
 
     @abstractmethod
-    def add(self, points: List[Dict[str, Any]]) -> None:
+    def add(self, points: list[dict[str, Any]]) -> None:
         """Add points to the buffer, evicting oldest if over capacity."""
 
     @abstractmethod
-    def get_all(self) -> List[Dict[str, Any]]:
+    def get_all(self) -> list[dict[str, Any]]:
         """Return a copy of all buffered points without clearing."""
 
     @abstractmethod
@@ -45,7 +46,7 @@ class BufferBackend(ABC):
     def resize(self, max_size: int) -> None:
         """Update the maximum buffer capacity."""
 
-    def drain(self, batch_size: int = 5000) -> Tuple[List[Dict[str, Any]], int]:
+    def drain(self, batch_size: int = 5000) -> tuple[list[dict[str, Any]], int]:
         """Remove and return the oldest batch_size points atomically.
 
         Returns (points, remaining_count). Points are deleted from the buffer
@@ -73,13 +74,13 @@ class MemoryBuffer(BufferBackend):
     This extracts the original behavior from Plexus client._failed_buffer.
     """
 
-    def __init__(self, max_size: int = 10_000, on_overflow: Optional[Callable[[int], None]] = None):
+    def __init__(self, max_size: int = 10_000, on_overflow: Callable[[int], None] | None = None):
         self._max_size = max_size
         self._on_overflow = on_overflow
-        self._buffer: List[Dict[str, Any]] = []
+        self._buffer: list[dict[str, Any]] = []
         self._lock = threading.Lock()
 
-    def add(self, points: List[Dict[str, Any]]) -> None:
+    def add(self, points: list[dict[str, Any]]) -> None:
         with self._lock:
             self._buffer.extend(points)
             if len(self._buffer) > self._max_size:
@@ -89,7 +90,7 @@ class MemoryBuffer(BufferBackend):
                 if self._on_overflow:
                     self._on_overflow(overflow)
 
-    def get_all(self) -> List[Dict[str, Any]]:
+    def get_all(self) -> list[dict[str, Any]]:
         with self._lock:
             return list(self._buffer)
 
@@ -105,7 +106,7 @@ class MemoryBuffer(BufferBackend):
         with self._lock:
             self._max_size = max_size
 
-    def drain(self, batch_size: int = 5000) -> Tuple[List[Dict[str, Any]], int]:
+    def drain(self, batch_size: int = 5000) -> tuple[list[dict[str, Any]], int]:
         with self._lock:
             batch = self._buffer[:batch_size]
             self._buffer = self._buffer[batch_size:]
@@ -129,10 +130,10 @@ class SqliteBuffer(BufferBackend):
 
     def __init__(
         self,
-        path: Optional[str] = None,
-        max_size: Optional[int] = 100_000,
-        max_bytes: Optional[int] = None,
-        on_overflow: Optional[Callable[[int], None]] = None,
+        path: str | None = None,
+        max_size: int | None = 100_000,
+        max_bytes: int | None = None,
+        on_overflow: Callable[[int], None] | None = None,
     ):
         self._max_size = max_size
         self._max_bytes = max_bytes
@@ -159,7 +160,7 @@ class SqliteBuffer(BufferBackend):
         )
         self._conn.commit()
 
-    def add(self, points: List[Dict[str, Any]]) -> None:
+    def add(self, points: list[dict[str, Any]]) -> None:
         if not points:
             return
         with self._lock:
@@ -178,7 +179,7 @@ class SqliteBuffer(BufferBackend):
             self._conn.commit()
             self._evict()
 
-    def get_all(self) -> List[Dict[str, Any]]:
+    def get_all(self) -> list[dict[str, Any]]:
         with self._lock:
             cursor = self._conn.execute("SELECT data FROM points ORDER BY id")
             return [json.loads(row[0]) for row in cursor.fetchall()]
@@ -197,7 +198,7 @@ class SqliteBuffer(BufferBackend):
         with self._lock:
             self._max_size = max_size
 
-    def drain(self, batch_size: int = 5000) -> Tuple[List[Dict[str, Any]], int]:
+    def drain(self, batch_size: int = 5000) -> tuple[list[dict[str, Any]], int]:
         """Remove and return the oldest batch_size points atomically.
 
         Uses a single transaction: SELECT then DELETE by rowid. If the process

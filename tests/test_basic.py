@@ -107,6 +107,7 @@ def test_send_batch_per_point_timestamps():
 def test_error_message_uses_plexus_init():
     """AuthenticationError for missing API key must reference 'plexus init', not 'plexus start'."""
     import pytest
+
     from plexus.client import AuthenticationError
     px = Plexus(api_key="test_key", endpoint="http://localhost", persistent_buffer=False)
     px.api_key = ""

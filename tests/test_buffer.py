@@ -3,9 +3,7 @@
 import os
 import tempfile
 
-
 from plexus.buffer import MemoryBuffer, SqliteBuffer
-
 
 # ===========================================================================
 # Shared test cases (run against both backends)

@@ -35,7 +35,7 @@ dependencies = [
 # separately on the device (e.g. adafruit-circuitpython-mlx90640 — requires
 # Raspberry Pi hardware libs and doesn't install on other platforms).
 video = ["Pillow>=12.2.0", "opencv-python-headless>=4.8", "numpy>=1.24"]
-dev = ["pytest>=9.0.3", "pytest-cov", "ruff", "websockets>=12", "opencv-python-headless>=4.8", "numpy>=1.24"]
+dev = ["pytest>=9.0.3", "pytest-cov", "ruff==0.15.12", "websockets>=12", "opencv-python-headless>=4.8", "numpy>=1.24"]
 
 [project.scripts]
 plexus = "plexus.cli:main"

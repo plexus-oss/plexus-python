@@ -11,7 +11,9 @@ Run:
 
 import argparse
 import time
+
 import psutil
+
 from plexus import Plexus
 
 parser = argparse.ArgumentParser(description="Stream Mac system metrics to Plexus.")

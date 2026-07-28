@@ -32,8 +32,9 @@ import random
 import struct
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 try:
     import websocket  # websocket-client
@@ -52,23 +53,23 @@ HEARTBEAT_INTERVAL_S = 30.0
 BACKOFF_BASE_S = 1.0
 BACKOFF_MAX_S = 60.0
 
-CommandHandler = Callable[[str, Dict[str, Any]], Optional[Dict[str, Any]]]
+CommandHandler = Callable[[str, dict[str, Any]], dict[str, Any] | None]
 
 
 @dataclass
 class _RegisteredCommand:
     name: str
     handler: CommandHandler
-    description: Optional[str] = None
-    params: List[Dict[str, Any]] = field(default_factory=list)
+    description: str | None = None
+    params: list[dict[str, Any]] = field(default_factory=list)
     # "accept" (default): run overlapping invocations concurrently.
     # "reject": refuse a new invocation with an error result while a
     # previous one of the same command is still running.
     concurrency: str = "accept"
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    def to_manifest(self) -> Dict[str, Any]:
-        m: Dict[str, Any] = {"name": self.name}
+    def to_manifest(self) -> dict[str, Any]:
+        m: dict[str, Any] = {"name": self.name}
         if self.description:
             m["description"] = self.description
         if self.params:
@@ -96,7 +97,7 @@ class WebSocketTransport:
         agent_version: str = "0.0.0",
         platform: str = "python-sdk",
         auto_reconnect: bool = True,
-        on_clock_synced: Optional[Callable[[int], None]] = None,
+        on_clock_synced: Callable[[int], None] | None = None,
     ):
         if not api_key:
             raise ValueError("api_key required")
@@ -111,16 +112,16 @@ class WebSocketTransport:
         self.auto_reconnect = auto_reconnect
         self._on_clock_synced = on_clock_synced
 
-        self._commands: Dict[str, _RegisteredCommand] = {}
-        self._ws: Optional[websocket.WebSocket] = None
+        self._commands: dict[str, _RegisteredCommand] = {}
+        self._ws: websocket.WebSocket | None = None
         self._ws_lock = threading.Lock()
         self._authenticated = threading.Event()
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._backoff_attempt = 0
         self._clock_offset_ms: int = 0
-        self._video_queue: "queue.Queue[bytes]" = queue.Queue(maxsize=2)
-        self._video_thread: Optional[threading.Thread] = None
+        self._video_queue: queue.Queue[bytes] = queue.Queue(maxsize=2)
+        self._video_thread: threading.Thread | None = None
 
     # ------------------------------------------------------------------ public
 
@@ -129,8 +130,8 @@ class WebSocketTransport:
         name: str,
         handler: CommandHandler,
         *,
-        description: Optional[str] = None,
-        params: Optional[List[Dict[str, Any]]] = None,
+        description: str | None = None,
+        params: list[dict[str, Any]] | None = None,
         concurrency: str = "accept",
     ) -> None:
         """Register a command handler. Must be called before start() to be
@@ -197,7 +198,7 @@ class WebSocketTransport:
     def clock_offset_ms(self) -> int:
         return self._clock_offset_ms
 
-    def send_points(self, points: List[Dict[str, Any]]) -> bool:
+    def send_points(self, points: list[dict[str, Any]]) -> bool:
         """Send a telemetry frame. Returns False if the socket is not
         authenticated — caller is expected to fall back to HTTP."""
         if not points:
@@ -229,7 +230,7 @@ class WebSocketTransport:
         except queue.Full:
             return False
 
-    def send_json_video_frame(self, msg: Dict[str, Any]) -> bool:
+    def send_json_video_frame(self, msg: dict[str, Any]) -> bool:
         """Send a JSON video_frame message. Used for frames that carry extra
         metadata (e.g. thermal cameras) that the binary format cannot express."""
         if not self._authenticated.is_set():
@@ -363,7 +364,7 @@ class WebSocketTransport:
                 continue
             self._dispatch(_safe_json(raw))
 
-    def _dispatch(self, msg: Dict[str, Any]) -> None:
+    def _dispatch(self, msg: dict[str, Any]) -> None:
         mtype = msg.get("type")
         if mtype == "typed_command":
             self._handle_command(msg)
@@ -371,7 +372,7 @@ class WebSocketTransport:
             logger.warning("plexus ws server error: %s", msg.get("detail") or msg)
         # ignore unknown types — forward-compat
 
-    def _handle_command(self, msg: Dict[str, Any]) -> None:
+    def _handle_command(self, msg: dict[str, Any]) -> None:
         cmd_id = msg.get("id") or ""
         command = msg.get("command") or ""
         params = msg.get("params") or {}
@@ -437,7 +438,7 @@ class WebSocketTransport:
         reg: _RegisteredCommand,
         cmd_id: str,
         command: str,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         holds_lock: bool = False,
     ) -> None:
         try:
@@ -464,7 +465,7 @@ class WebSocketTransport:
             "result": result if result is not None else {},
         })
 
-    def _send_frame(self, frame: Dict[str, Any]) -> bool:
+    def _send_frame(self, frame: dict[str, Any]) -> bool:
         with self._ws_lock:
             ws = self._ws
         if ws is None:
@@ -518,7 +519,7 @@ def _ensure_device_path(url: str) -> str:
     return url + "/ws/device"
 
 
-def _safe_json(raw: Any) -> Dict[str, Any]:
+def _safe_json(raw: Any) -> dict[str, Any]:
     if isinstance(raw, (bytes, bytearray)):
         raw = raw.decode("utf-8", errors="replace")
     if not isinstance(raw, str):

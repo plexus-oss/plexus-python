@@ -9,7 +9,6 @@ import os
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 
 @dataclass
@@ -73,7 +72,7 @@ def load_config() -> dict:
             config = json.load(f)
             # Merge with defaults to handle missing keys
             return {**DEFAULT_CONFIG, **config}
-    except (json.JSONDecodeError, IOError):
+    except (OSError, json.JSONDecodeError):
         return DEFAULT_CONFIG.copy()
 
 
@@ -90,7 +89,7 @@ def save_config(config: dict) -> None:
     os.chmod(CONFIG_FILE, 0o600)
 
 
-def get_api_key() -> Optional[str]:
+def get_api_key() -> str | None:
     """Get API key from config or environment variable."""
     # Environment variable takes precedence
     env_key = os.environ.get("PLEXUS_API_KEY")
@@ -131,7 +130,7 @@ def get_gateway_ws_url() -> str:
     return (config.get("gateway_ws_url") or PLEXUS_GATEWAY_WS_URL).rstrip("/")
 
 
-def get_source_id() -> Optional[str]:
+def get_source_id() -> str | None:
     """Get the source ID, generating one if not set."""
     config = load_config()
     source_id = config.get("source_id")

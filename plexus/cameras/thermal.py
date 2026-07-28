@@ -23,7 +23,7 @@ import base64
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 import cv2
 import numpy as np
@@ -89,17 +89,17 @@ class ThermalFrame:
     sensor_height: int       # native sensor height
     temp_min: float
     temp_max: float
-    temps: Optional[np.ndarray]  # native res; None when sensor > threshold
+    temps: np.ndarray | None  # native res; None when sensor > threshold
     timestamp_ms: int
 
     def to_message(
-        self, camera_id: str, source_id: Optional[str] = None, quality: int = 85
-    ) -> Dict[str, Any]:
+        self, camera_id: str, source_id: str | None = None, quality: int = 85
+    ) -> dict[str, Any]:
         """Build the gateway `video_frame` wire message for this frame."""
         _, buf = cv2.imencode(".jpg", self.image, [cv2.IMWRITE_JPEG_QUALITY, quality])
         b64 = base64.b64encode(buf.tobytes()).decode("ascii")
 
-        msg: Dict[str, Any] = {
+        msg: dict[str, Any] = {
             "type": "video_frame",
             "camera_id": camera_id,
             "frame": b64,
@@ -133,7 +133,7 @@ def _upscale_size(sw: int, sh: int) -> tuple[int, int]:
 
 
 def build_thermal_frame(
-    temps: np.ndarray, timestamp_ms: Optional[int] = None
+    temps: np.ndarray, timestamp_ms: int | None = None
 ) -> ThermalFrame:
     """Colorize a temperature array into a ThermalFrame.
 

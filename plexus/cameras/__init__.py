@@ -1,7 +1,7 @@
 from plexus.cameras.thermal import (
-    NoCameraFound,
     MLX90640Camera,
     MLX90641Camera,
+    NoCameraFound,
     SimulatedThermalCamera,
     ThermalCamera,
     ThermalFrame,
@@ -12,9 +12,9 @@ from plexus.cameras.thermal import (
 )
 
 __all__ = [
-    "NoCameraFound",
     "MLX90640Camera",
     "MLX90641Camera",
+    "NoCameraFound",
     "SimulatedThermalCamera",
     "ThermalCamera",
     "ThermalFrame",

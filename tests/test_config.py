@@ -4,8 +4,7 @@ import os
 import stat
 from unittest.mock import patch
 
-
-from plexus.config import save_config, load_config
+from plexus.config import load_config, save_config
 
 
 class TestConfigPermissions:

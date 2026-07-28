@@ -29,10 +29,8 @@ import sys
 import threading
 import urllib.parse
 import webbrowser
-from typing import Optional
 
 from . import config
-
 
 DEFAULT_TIMEOUT_SECONDS = 300
 SUCCESS_REDIRECT_SECONDS = 10
@@ -187,7 +185,7 @@ def _success_html(target: str) -> bytes:
         target_js=repr(target),
     ).encode("utf-8")
 
-ERROR_HTML = """<!doctype html>
+ERROR_HTML = b"""<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -272,13 +270,13 @@ ERROR_HTML = """<!doctype html>
       </div>
     </div>
   </body>
-</html>""".encode("utf-8")
+</html>"""
 
 
 class _CallbackResult:
-    key: Optional[str] = None
-    state: Optional[str] = None
-    error: Optional[str] = None
+    key: str | None = None
+    state: str | None = None
+    error: str | None = None
 
 
 def _pick_free_port() -> int:
@@ -476,7 +474,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[list] = None) -> int:
+def main(argv: list | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)

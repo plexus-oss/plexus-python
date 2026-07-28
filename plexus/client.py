@@ -44,8 +44,9 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any, Dict, Generator, List, Optional, Tuple, Union
+from typing import Any, Union
 
 from plexus._log import _say
 from plexus.buffer import BufferBackend, MemoryBuffer, SqliteBuffer
@@ -71,9 +72,9 @@ class _Response:
 
 class _Session:
     def __init__(self):
-        self.headers: Dict[str, str] = {}
+        self.headers: dict[str, str] = {}
 
-    def post(self, url: str, data: bytes = b"", headers: Optional[Dict[str, str]] = None, timeout: float = 10.0) -> "_Response":
+    def post(self, url: str, data: bytes = b"", headers: dict[str, str] | None = None, timeout: float = 10.0) -> "_Response":
         req_headers = {**self.headers, **(headers or {})}
         req = urllib.request.Request(url, data=data, headers=req_headers, method="POST")
         try:
@@ -85,7 +86,7 @@ class _Session:
             if isinstance(e.reason, socket.timeout):
                 raise _Timeout(str(e.reason))
             raise _ConnError(str(e.reason))
-        except (TimeoutError, socket.timeout) as e:
+        except TimeoutError as e:
             raise _Timeout(str(e))
 
     def close(self) -> None:
@@ -101,7 +102,7 @@ class _ConnError(OSError):
 
 
 # Flexible value type - supports any JSON-serializable value
-FlexValue = Union[int, float, str, bool, Dict[str, Any], List[Any]]
+FlexValue = Union[int, float, str, bool, dict[str, Any], list[Any]]
 
 _JPEG_SOI = b"\xff\xd8"
 _JPEG_EOI = b"\xff\xd9"
@@ -137,13 +138,11 @@ def read_mjpeg_frames(pipe, chunk: int = 65536) -> Generator[bytes, None, None]:
 class PlexusError(Exception):
     """Base exception for Plexus errors."""
 
-    pass
 
 
 class AuthenticationError(PlexusError):
     """Raised when API key is missing or invalid."""
 
-    pass
 
 
 # The wire slug rule (gateway validate.go sourceIDPattern, max length =
@@ -179,8 +178,8 @@ _WS_ENVELOPE_BYTES = 64
 
 
 def _split_ws_frames(
-    points: List[Dict[str, Any]], byte_budget: int
-) -> List[List[Dict[str, Any]]]:
+    points: list[dict[str, Any]], byte_budget: int
+) -> list[list[dict[str, Any]]]:
     """Split points into telemetry-frame chunks under byte_budget serialized.
 
     The gateway enforces a 1MB read limit per WebSocket message and rejects
@@ -189,8 +188,8 @@ def _split_ws_frames(
     serialization plus a small envelope allowance. A single point larger than
     the budget still goes out alone (nothing more can be done client-side).
     """
-    chunks: List[List[Dict[str, Any]]] = []
-    cur: List[Dict[str, Any]] = []
+    chunks: list[list[dict[str, Any]]] = []
+    cur: list[dict[str, Any]] = []
     cur_bytes = _WS_ENVELOPE_BYTES
     for p in points:
         p_bytes = len(json.dumps(p).encode("utf-8")) + 1  # +1 for the comma
@@ -224,15 +223,15 @@ class Plexus:
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        endpoint: Optional[str] = None,
-        source_id: Optional[str] = None,
+        api_key: str | None = None,
+        endpoint: str | None = None,
+        source_id: str | None = None,
         timeout: float = 10.0,
-        retry_config: Optional[RetryConfig] = None,
+        retry_config: RetryConfig | None = None,
         max_buffer_size: int = 10000,
         persistent_buffer: bool = True,
-        buffer_path: Optional[str] = None,
-        ws_url: Optional[str] = None,
+        buffer_path: str | None = None,
+        ws_url: str | None = None,
     ):
         self.api_key = api_key or get_api_key()
         if not self.api_key:
@@ -249,8 +248,8 @@ class Plexus:
         self.retry_config = retry_config or RetryConfig()
         self._max_buffer_size = max_buffer_size
 
-        self._run_id: Optional[str] = None
-        self._session: Optional[_Session] = None
+        self._run_id: str | None = None
+        self._session: _Session | None = None
         self._store_frames: bool = False
         self._cv2 = None
         self._pil_image = None  # lazy PIL.Image import
@@ -298,7 +297,7 @@ class Plexus:
             self._session.headers["User-Agent"] = f"plexus-python/{__version__}"
         return self._session
 
-    def _normalize_ts_ms(self, timestamp: Optional[float] = None) -> int:
+    def _normalize_ts_ms(self, timestamp: float | None = None) -> int:
         """Normalize a timestamp to milliseconds.
 
         Accepts:
@@ -327,10 +326,10 @@ class Plexus:
         self,
         metric: str,
         value: FlexValue,
-        timestamp: Optional[float] = None,
-        tags: Optional[Dict[str, str]] = None,
-        data_class: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        timestamp: float | None = None,
+        tags: dict[str, str] | None = None,
+        data_class: str | None = None,
+    ) -> dict[str, Any]:
         """Create a data point dictionary.
 
         Value can be:
@@ -374,9 +373,9 @@ class Plexus:
         self,
         metric: str,
         value: FlexValue,
-        timestamp: Optional[float] = None,
-        tags: Optional[Dict[str, str]] = None,
-        data_class: Optional[str] = None,
+        timestamp: float | None = None,
+        tags: dict[str, str] | None = None,
+        data_class: str | None = None,
     ) -> bool:
         """
         Send a single metric value to Plexus.
@@ -414,8 +413,8 @@ class Plexus:
         self,
         name: str,
         data: FlexValue,
-        timestamp: Optional[float] = None,
-        tags: Optional[Dict[str, str]] = None,
+        timestamp: float | None = None,
+        tags: dict[str, str] | None = None,
     ) -> bool:
         """
         Send a named event with text or structured data.
@@ -436,9 +435,9 @@ class Plexus:
 
     def send_batch(
         self,
-        points: List[Union[Tuple[str, FlexValue], Tuple[str, FlexValue, float]]],
-        timestamp: Optional[float] = None,
-        tags: Optional[Dict[str, str]] = None,
+        points: list[tuple[str, FlexValue] | tuple[str, FlexValue, float]],
+        timestamp: float | None = None,
+        tags: dict[str, str] | None = None,
     ) -> bool:
         """
         Send multiple metrics at once.
@@ -484,8 +483,8 @@ class Plexus:
         """Lazily construct and start the WebSocket transport."""
         if self._ws is not None:
             return self._ws
-        from plexus.ws import WebSocketTransport
         from plexus import __version__
+        from plexus.ws import WebSocketTransport
         self._ws = WebSocketTransport(
             api_key=self.api_key,
             source_id=self.source_id,
@@ -502,7 +501,7 @@ class Plexus:
     def _on_clock_synced(self, offset_ms: int) -> None:
         self._clock_offset_ms = offset_ms
 
-    def _encode_frame(self, frame, quality: int) -> Tuple[bytes, int, int]:
+    def _encode_frame(self, frame, quality: int) -> tuple[bytes, int, int]:
         """Normalize any supported frame type to (jpeg_bytes, width, height).
 
         Accepted inputs:
@@ -568,7 +567,7 @@ class Plexus:
                     ) from e
         return self._pil_image
 
-    def _pil_to_jpeg(self, img, quality: int) -> Tuple[bytes, int, int]:
+    def _pil_to_jpeg(self, img, quality: int) -> tuple[bytes, int, int]:
         import io
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
@@ -620,7 +619,7 @@ class Plexus:
         frame,
         camera_id: str = "camera:0",
         quality: int = 85,
-        timestamp: Optional[float] = None,
+        timestamp: float | None = None,
     ) -> bool:
         """Send a single video frame to Plexus (WebSocket transport only).
 
@@ -659,7 +658,7 @@ class Plexus:
         temps,
         camera_id: str = "thermal:0",
         quality: int = 85,
-        timestamp: Optional[float] = None,
+        timestamp: float | None = None,
     ) -> bool:
         """Send a thermal camera frame to Plexus (WebSocket transport only).
 
@@ -762,8 +761,8 @@ class Plexus:
         name: str,
         handler,
         *,
-        description: Optional[str] = None,
-        params: Optional[List[Dict[str, Any]]] = None,
+        description: str | None = None,
+        params: list[dict[str, Any]] | None = None,
         concurrency: str = "accept",
     ) -> None:
         """Register a command handler (WebSocket transport only).
@@ -802,7 +801,7 @@ class Plexus:
     _SEND_CHUNK_POINTS = 5000
     _WS_FRAME_BYTE_BUDGET = 900_000
 
-    def _send_points(self, points: List[Dict[str, Any]]) -> bool:
+    def _send_points(self, points: list[dict[str, Any]]) -> bool:
         """Send data points to the gateway with retry and buffering.
 
         Any locally buffered backlog is drained together with the new points
@@ -865,7 +864,7 @@ class Plexus:
                     self._announced_buffering = True
                 raise
 
-    def _send_chunk(self, ws, points: List[Dict[str, Any]]) -> None:
+    def _send_chunk(self, ws, points: list[dict[str, Any]]) -> None:
         """Send one bounded chunk (≤ _SEND_CHUNK_POINTS). Raises on failure.
 
         WebSocket preferred. A ws.send_points() True only confirms the frame
@@ -889,10 +888,10 @@ class Plexus:
         self._send_http(points)
         self._note_send(len(points), via="http")
 
-    def _send_http(self, points: List[Dict[str, Any]]) -> None:
+    def _send_http(self, points: list[dict[str, Any]]) -> None:
         """POST one chunk of points to /ingest with retries. Raises on failure."""
         url = f"{self.gateway_url}/ingest"
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
 
         for attempt in range(self.retry_config.max_retries + 1):
             try:
@@ -993,11 +992,11 @@ class Plexus:
             _say("✓ Sending again (drained the local buffer).")
             self._announced_buffering = False
 
-    def _add_to_buffer(self, points: List[Dict[str, Any]]) -> None:
+    def _add_to_buffer(self, points: list[dict[str, Any]]) -> None:
         """Add points to the local buffer for later retry."""
         self._buffer.add(points)
 
-    def _get_buffered_points(self) -> List[Dict[str, Any]]:
+    def _get_buffered_points(self) -> list[dict[str, Any]]:
         """Get a copy of buffered points without clearing."""
         return self._buffer.get_all()
 
@@ -1029,7 +1028,7 @@ class Plexus:
         return self._send_points([])
 
     @contextmanager
-    def run(self, run_id: str, tags: Optional[Dict[str, str]] = None, store_frames: bool = False):
+    def run(self, run_id: str, tags: dict[str, str] | None = None, store_frames: bool = False):
         """
         Context manager for recording a run.
 
