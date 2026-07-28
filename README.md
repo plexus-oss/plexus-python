@@ -88,16 +88,6 @@ px.event("sensor_error", {"sensor": "imu", "code": 42}, tags={"motor": "A"})
 
 The platform displays events as markers overlaid on your telemetry charts, not as time-series lines.
 
-### `run(run_id)` — group data into a named recording
-
-```python
-with px.run("thermal-cycle-001"):
-    while running:
-        px.send("temperature", read_temp())
-```
-
-All `send()` calls inside the context are tagged with `run_id`, making it easy to isolate and replay that slice of data in the dashboard.
-
 ## Video streaming
 
 Two methods depending on whether you control the capture loop or just have a URL.

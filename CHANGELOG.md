@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Removed
+
+- `run()` context manager and its `POST /api/runs` plumbing. The `/api/runs` route never
+  existed on the platform (both notifications failed silently on every call), the ingest
+  loader drops `run_id` from points, and nothing was ever stored — so removal loses no
+  data. To group a slice of data, use `tags` on each point.
+
 ## [0.8.0] - 2026-07-02 - Command concurrency control
 
 ### Added

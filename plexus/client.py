@@ -24,12 +24,6 @@ Usage:
         ("pressure", 1013.25),
     ])
 
-    # Run recording
-    with px.run("motor-test-001"):
-        while True:
-            px.send("temperature", read_temp())
-            time.sleep(0.01)
-
 Note: Requires authentication. Run 'plexus init' or set PLEXUS_API_KEY.
 """
 
@@ -45,7 +39,6 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Generator
-from contextlib import contextmanager
 from typing import Any, Union
 
 from plexus._log import _say
@@ -248,9 +241,7 @@ class Plexus:
         self.retry_config = retry_config or RetryConfig()
         self._max_buffer_size = max_buffer_size
 
-        self._run_id: str | None = None
         self._session: _Session | None = None
-        self._store_frames: bool = False
         self._cv2 = None
         self._pil_image = None  # lazy PIL.Image import
         self._fit_warned: bool = False
@@ -365,8 +356,6 @@ class Plexus:
         }
         if tags:
             point["tags"] = tags
-        if self._run_id:
-            point["run_id"] = self._run_id
         return point
 
     def send(
@@ -1026,65 +1015,6 @@ class Plexus:
 
         # Send with empty new points list - will include buffered points
         return self._send_points([])
-
-    @contextmanager
-    def run(self, run_id: str, tags: dict[str, str] | None = None, store_frames: bool = False):
-        """
-        Context manager for recording a run.
-
-        All sends within this context will be tagged with the run ID,
-        making it easy to replay and analyze later.
-
-        Args:
-            run_id: Unique identifier for this run (e.g., "motor-test-001")
-            tags: Optional tags to apply to all points in this run
-            store_frames: If True, camera frames are uploaded to the Plexus API
-                         for persistent storage alongside the live WebSocket stream.
-
-        Example:
-            with px.run("motor-test-001", store_frames=True):
-                while True:
-                    px.send("temperature", read_temp())
-                    time.sleep(0.01)
-        """
-        self._run_id = run_id
-        self._store_frames = store_frames
-
-        # Notify API that run started
-        try:
-            self._get_session().post(
-                f"{self.endpoint}/api/runs",
-                data=json.dumps({
-                    "run_id": run_id,
-                    "source_id": self.source_id,
-                    "status": "started",
-                    "tags": tags,
-                    "timestamp": (int(time.time() * 1000) + self._clock_offset_ms) / 1000,
-                }).encode("utf-8"),
-                timeout=self.timeout,
-            )
-        except Exception as e:
-            logger.debug(f"Run start notification failed: {e}")
-
-        try:
-            yield
-        finally:
-            # Notify API that run ended
-            try:
-                self._get_session().post(
-                    f"{self.endpoint}/api/runs",
-                    data=json.dumps({
-                        "run_id": run_id,
-                        "source_id": self.source_id,
-                        "status": "ended",
-                        "timestamp": (int(time.time() * 1000) + self._clock_offset_ms) / 1000,
-                    }).encode("utf-8"),
-                    timeout=self.timeout,
-                )
-            except Exception as e:
-                logger.debug(f"Run end notification failed: {e}")
-            self._run_id = None
-            self._store_frames = False
 
     def close(self):
         """Close the client, flush any buffered points, and release resources."""

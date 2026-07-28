@@ -113,7 +113,7 @@ x-api-key: plx_xxxxx
 
 ### Sessions
 
-> **Removed / not built.** There is no sessions REST API (`POST /api/sessions`, `PATCH /api/sessions/{id}`) — no such route exists in the gateway or platform. To group a slice of data, use the SDK's `run()` context (which tags points with a `run_id`) or plain `tags` on each point.
+> **Removed / not built.** There is no sessions or runs REST API (`POST /api/sessions`, `POST /api/runs`) — no such route exists in the gateway or platform, and the SDK's former `run()` context has been removed. To group a slice of data, use plain `tags` on each point.
 
 ## WebSocket API
 
@@ -404,6 +404,5 @@ px.send("temperature", 72.5, timestamp=t)        # your timestamp → used as-is
 - **Batch points** - Send up to 100 points per request for HTTP
 - **Omit timestamp when unsure** - The Python SDK applies server-synced clock correction when `timestamp` is omitted over WebSocket; only pass an explicit timestamp when you have a reliable wall-clock source
 - **Consistent source_id** - Use the same ID for each physical device/source
-- **Use tags** - Label data for filtering (e.g., `{"location": "lab"}`)
-- **Use sessions** - Group related data for easier analysis
+- **Use tags** - Label data for filtering and grouping (e.g., `{"location": "lab"}`)
 - **Prefer WebSocket** - For real-time UI-controlled devices, the SDK connects over WebSocket by default
