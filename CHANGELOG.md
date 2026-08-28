@@ -2,12 +2,45 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-27 - Flexible values and the real slug rule
+
+Two fixes for data that looked like it was sent but never arrived, plus the
+removal of a dead API.
+
+### Fixed
+
+- **`send()` now infers a point's class from its value type** instead of always
+  tagging `class="metric"`. Numbers stay metrics; strings, bools, dicts and
+  lists become events. The gateway rejects a non-numeric value on
+  `class="metric"` and drops the *whole frame* — so `px.send("state", "RUNNING")`
+  silently took every other point in that batch down with it. Non-numeric values
+  have been advertised since 0.2.0; this is what makes them work.
+  An explicit `data_class="metric"` with a non-numeric value now raises
+  `PlexusError` locally rather than failing on the wire.
+
+- **`source_id` validation matched an older, stricter rule than the server.**
+  The SDK enforced `^[a-z0-9][a-z0-9_-]{1,62}$` — no dots, minimum two
+  characters — while the gateway accepts `^[a-z0-9][a-z0-9._-]*$` up to 256
+  characters. Names production would have accepted (`rack.01`, `a`) raised
+  `ValueError` in the constructor before a single byte left the host, which
+  reads as an auth problem and is not one. The SDK now mirrors the wire rule.
+  Uuid-shaped ids are still rejected: the app resolves those as internal ids,
+  so such a source would be unreachable.
+
+- Buffer drains are chunked, so a backlog over the gateway's 10k-points-per-batch
+  ceiling no longer wedges every subsequent send. The WebSocket auth wait is paid
+  once, on the first send, instead of stalling each call.
+
 ### Removed
 
 - `run()` context manager and its `POST /api/runs` plumbing. The `/api/runs` route never
   existed on the platform (both notifications failed silently on every call), the ingest
   loader drops `run_id` from points, and nothing was ever stored — so removal loses no
   data. To group a slice of data, use `tags` on each point.
+
+### Security
+
+- Bumped pillow to 12.3.0 and idna to 3.19 for published advisories.
 
 ## [0.8.0] - 2026-07-02 - Command concurrency control
 
