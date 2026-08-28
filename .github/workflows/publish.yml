@@ -30,10 +30,24 @@ jobs:
               match = re.search(r'^version\s*=\s*\"(.+?)\"', f.read(), re.MULTILINE)
               print(match.group(1))
           ")
-          echo "Git tag version: $TAG"
-          echo "Code version:    $CODE_VERSION"
+          INIT_VERSION=$(python -c "
+          import re
+          with open('plexus/__init__.py') as f:
+              match = re.search(r'^__version__\s*=\s*\"(.+?)\"', f.read(), re.MULTILINE)
+              print(match.group(1))
+          ")
+          echo "Git tag version:     $TAG"
+          echo "pyproject.toml:      $CODE_VERSION"
+          echo "plexus/__init__.py:  $INIT_VERSION"
           if [ "$TAG" != "$CODE_VERSION" ]; then
-            echo "::error::Tag v$TAG does not match code version $CODE_VERSION"
+            echo "::error::Tag v$TAG does not match pyproject.toml version $CODE_VERSION"
+            exit 1
+          fi
+          # 0.9.0 shipped to PyPI with __version__ still reading 0.8.0: the CI
+          # job that checks this does not gate publish, and this job only read
+          # pyproject.toml. Check it here, where it can actually stop an upload.
+          if [ "$TAG" != "$INIT_VERSION" ]; then
+            echo "::error::Tag v$TAG does not match plexus/__init__.py version $INIT_VERSION"
             exit 1
           fi
 

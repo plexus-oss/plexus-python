@@ -31,6 +31,19 @@ if [[ "$CODE_VERSION" != "$VERSION" ]]; then
     exit 1
 fi
 
+# plexus/__init__.py carries its own __version__, and it is what users read
+# back when you ask them what they are running. Keep it in lockstep.
+INIT_VERSION=$(python3 -c "
+import re
+with open('plexus/__init__.py') as f:
+    m = re.search(r'^__version__\s*=\s*\"(.+?)\"', f.read(), re.MULTILINE)
+    print(m.group(1))
+")
+if [[ "$INIT_VERSION" != "$VERSION" ]]; then
+    echo "Error: plexus/__init__.py has version $INIT_VERSION, expected $VERSION" >&2
+    exit 1
+fi
+
 # Extract release title suffix (the part after the date, e.g. "Video input broadening and wire safety")
 TITLE_SUFFIX=$(grep "## \[$VERSION\]" CHANGELOG.md | sed 's/.*[0-9] - //')
 

@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-08-27 - Version sync
+
+### Fixed
+
+- `plexus.__version__` reported `0.8.0` in the 0.9.0 release. The release script
+  and the publish workflow both validated `pyproject.toml` only; the CI job that
+  compares the two version sites does not gate publishing, so it failed after the
+  upload had already gone out. Both gates now check `plexus/__init__.py` too.
+  0.9.0 is functionally identical to this release — only the reported version
+  string was wrong.
+
 ## [0.9.0] - 2026-08-27 - Flexible values and the real slug rule
 
 Two fixes for data that looked like it was sent but never arrived, plus the
