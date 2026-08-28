@@ -14,15 +14,18 @@ credentials — an agent reads them and writes correct code.
 
 ## Install
 
-Copy the ones you want into your skills directory:
-
 ```bash
-git clone https://github.com/plexus-oss/plexus-python
-cp -r plexus-python/skills/* ~/.claude/skills/
+pip install plexus-python
+plexus skills install
 ```
 
-Per-project instead of global? Use `.claude/skills/` in the repo, and they
-travel with it.
+That writes all three into `~/.claude/skills`. Use `--project` to install into
+`./.claude/skills` instead, so they travel with the repo, `--dir` to pick a
+target, or `--list` to see what ships without writing anything.
+
+Re-running refreshes them. These are reference docs, not config: a stale copy
+is the failure this command exists to fix, so an existing skill is replaced —
+reported as `updated`, never silently.
 
 Then just ask for what you want — "send my ESP32's battery voltage to Plexus",
 "build me a fleet dashboard" — and the agent picks the right one from its

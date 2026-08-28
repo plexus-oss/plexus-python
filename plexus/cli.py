@@ -23,12 +23,14 @@ from __future__ import annotations
 import argparse
 import http.server
 import secrets
+import shutil
 import socket
 import socketserver
 import sys
 import threading
 import urllib.parse
 import webbrowser
+from pathlib import Path
 
 from . import config
 
@@ -439,6 +441,72 @@ def cmd_whoami(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _bundled_skills_dir() -> Path | None:
+    """Where the shipped skills live, wheel or checkout.
+
+    An installed wheel force-includes them at `plexus/_skills` (see
+    pyproject.toml). An editable install or a source checkout has no such
+    directory, so fall back to the repo root, which is where they are
+    authored and where `scripts/verify_skills.py` checks them.
+    """
+    here = Path(__file__).resolve().parent
+    for candidate in (here / "_skills", here.parent / "skills"):
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def _skill_names(root: Path) -> list[str]:
+    return sorted(p.parent.name for p in root.glob("*/SKILL.md"))
+
+
+def cmd_skills(args: argparse.Namespace) -> int:
+    """Copy the bundled agent skills into a skills directory."""
+    source = _bundled_skills_dir()
+    if source is None:
+        print(
+            "No bundled skills found. This build did not ship them — "
+            "reinstall with `pip install --upgrade plexus-python`.",
+            file=sys.stderr,
+        )
+        return 1
+
+    names = _skill_names(source)
+    if not names:
+        print(f"No skills in {source}.", file=sys.stderr)
+        return 1
+
+    if args.list:
+        print(f"Bundled skills ({source}):")
+        for name in names:
+            print(f"  {name}")
+        return 0
+
+    target = Path(args.dir).expanduser() if args.dir else _default_skills_target(args)
+    target.mkdir(parents=True, exist_ok=True)
+
+    for name in names:
+        dest = target / name
+        # These are canonical reference docs, not user config: a stale copy is
+        # the failure mode we are fixing, so refresh rather than skip. Local
+        # edits are reported so an overwrite is never silent.
+        existed = dest.exists()
+        shutil.rmtree(dest, ignore_errors=True)
+        shutil.copytree(source / name, dest)
+        print(f"  {'updated' if existed else 'installed'}  {name}")
+
+    print(f"\n✓ {len(names)} skills in {target}")
+    print("Ask your agent for what you want — it picks the right one.")
+    return 0
+
+
+def _default_skills_target(args: argparse.Namespace) -> Path:
+    """`~/.claude/skills` normally; `.claude/skills` here with --project."""
+    if args.project:
+        return Path.cwd() / ".claude" / "skills"
+    return Path.home() / ".claude" / "skills"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="plexus",
@@ -470,6 +538,36 @@ def build_parser() -> argparse.ArgumentParser:
 
     whoami = sub.add_parser("whoami", help="Show the local credential summary.")
     whoami.set_defaults(func=cmd_whoami)
+
+    skills = sub.add_parser(
+        "skills",
+        help="Install the bundled agent skills into your skills directory.",
+        description=(
+            "Copy the Plexus agent skills (plexus, plexus-firmware, "
+            "plexus-dashboard) into ~/.claude/skills so a coding agent knows "
+            "the API. Existing copies are refreshed — they are reference "
+            "docs, and a stale one is what this fixes."
+        ),
+    )
+    skills.add_argument(
+        "action",
+        nargs="?",
+        default="install",
+        choices=["install"],
+        help="Only `install` today; positional so `plexus skills install` reads naturally.",
+    )
+    skills.add_argument("--dir", help="Target directory (default: ~/.claude/skills).")
+    skills.add_argument(
+        "--project",
+        action="store_true",
+        help="Install into ./.claude/skills so they travel with the repo.",
+    )
+    skills.add_argument(
+        "--list",
+        action="store_true",
+        help="List the bundled skills and exit without writing anything.",
+    )
+    skills.set_defaults(func=cmd_skills)
 
     return parser
 

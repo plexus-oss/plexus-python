@@ -113,3 +113,98 @@ def test_query_response_treated_as_columnar(skill: Path):
         "types the query response as an array of points; it is columnar "
         "(`series[m].timestamp_ms[i]` / `series[m].avg[i]`)"
     )
+
+
+# --- `plexus skills install` -------------------------------------------------
+#
+# The packaging half of this is what actually breaks: the skills live at the
+# repo root but must ship *inside* the wheel for the CLI to find them. A test
+# that only exercises the source checkout would pass while the shipped package
+# was empty — which is the exact shape of a bug this SDK has already had once.
+# So `_bundled_skills_dir` is tested through both of its branches.
+
+
+def test_bundled_skills_dir_found_in_checkout():
+    from plexus.cli import _bundled_skills_dir
+
+    found = _bundled_skills_dir()
+    assert found is not None, "skills should resolve from a source checkout"
+    assert (found / "plexus" / "SKILL.md").is_file()
+
+
+def test_bundled_skills_prefers_packaged_copy(tmp_path, monkeypatch):
+    """An installed wheel has `plexus/_skills`; it must win over the sibling."""
+    import plexus.cli as cli
+
+    fake_pkg = tmp_path / "plexus"
+    (fake_pkg / "_skills" / "demo").mkdir(parents=True)
+    (fake_pkg / "_skills" / "demo" / "SKILL.md").write_text("---\nname: demo\n---\n")
+    (tmp_path / "skills").mkdir()
+
+    monkeypatch.setattr(cli, "__file__", str(fake_pkg / "cli.py"))
+    assert cli._bundled_skills_dir() == fake_pkg / "_skills"
+
+
+def test_skills_list_writes_nothing(tmp_path, capsys):
+    from plexus.cli import main
+
+    target = tmp_path / "skills"
+    assert main(["skills", "--list", "--dir", str(target)]) == 0
+    assert not target.exists(), "--list must not create the target directory"
+    assert "plexus-firmware" in capsys.readouterr().out
+
+
+def test_skills_install_writes_every_skill(tmp_path):
+    from plexus.cli import main
+
+    target = tmp_path / "skills"
+    assert main(["skills", "install", "--dir", str(target)]) == 0
+
+    installed = sorted(p.parent.name for p in target.glob("*/SKILL.md"))
+    assert installed == [s.parent.name for s in SKILLS]
+    for skill in SKILLS:
+        assert (target / skill.parent.name / "SKILL.md").read_text() == skill.read_text()
+
+
+def test_skills_install_refreshes_existing(tmp_path, capsys):
+    """Second run reports `updated`, and a stale copy is replaced.
+
+    Refreshing is the point: these are reference docs, and a stale one is the
+    failure this command exists to fix. It must not be silent about it.
+    """
+    from plexus.cli import main
+
+    target = tmp_path / "skills"
+    main(["skills", "install", "--dir", str(target)])
+    capsys.readouterr()
+
+    stale = target / "plexus" / "SKILL.md"
+    stale.write_text("stale content")
+    assert main(["skills", "install", "--dir", str(target)]) == 0
+
+    out = capsys.readouterr().out
+    assert "updated" in out and "installed" not in out
+    assert stale.read_text() != "stale content"
+
+
+def test_skills_install_project_scope(tmp_path, monkeypatch):
+    from plexus.cli import main
+
+    monkeypatch.chdir(tmp_path)
+    assert main(["skills", "install", "--project"]) == 0
+    assert (tmp_path / ".claude" / "skills" / "plexus" / "SKILL.md").is_file()
+
+
+def test_default_target_is_home_unless_project(tmp_path, monkeypatch):
+    """The default path writes to the real home, so assert it without writing."""
+    import argparse
+
+    from plexus.cli import _default_skills_target
+
+    monkeypatch.chdir(tmp_path)
+    assert _default_skills_target(argparse.Namespace(project=False)) == (
+        Path.home() / ".claude" / "skills"
+    )
+    assert _default_skills_target(argparse.Namespace(project=True)) == (
+        tmp_path / ".claude" / "skills"
+    )

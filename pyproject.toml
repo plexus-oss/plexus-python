@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "plexus-python"
-version = "0.9.1"
+version = "0.10.0"
 description = "Thin Python SDK for Plexus — send telemetry in one line"
 readme = "README.md"
 license = "Apache-2.0"
@@ -48,6 +48,14 @@ Issues = "https://github.com/plexus-oss/plexus-python/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["plexus"]
+
+# The agent skills live at the repo root (where the verifier and the docs
+# expect them) but must ship *inside* the package so `plexus skills install`
+# can find them relative to `plexus/__init__.py` in an installed wheel.
+# Without this they reach the sdist only, which lands in a temp build dir
+# nobody looks in.
+[tool.hatch.build.targets.wheel.force-include]
+"skills" = "plexus/_skills"
 
 [tool.ruff]
 line-length = 100
