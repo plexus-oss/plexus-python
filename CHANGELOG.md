@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The test suite no longer reaches the production gateway. `plexus/config.py`
+  defaults to `wss://gateway.plexus.company`, so every run opened real sockets to
+  it and left a burst of `device auth failed / invalid API key` warnings in
+  production logs — noise indistinguishable from a customer with a broken key.
+  It also read the developer's own `~/.plexus/config.json`, so a real API key
+  could have authenticated the suite. `tests/conftest.py` pins all three
+  endpoints to loopback and redirects config reads to a tmp dir;
+  `tests/test_isolation.py` proves both are in effect.
+
 ## [0.9.1] - 2026-08-27 - Version sync
 
 ### Fixed
