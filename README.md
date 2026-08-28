@@ -225,6 +225,19 @@ The SDK sends an `ack` frame before invoking the handler, then a `result` frame 
 | `PLEXUS_GATEWAY_URL`    | HTTP ingest URL              | `https://gateway.plexus.company` |
 | `PLEXUS_GATEWAY_WS_URL` | WebSocket URL              | `wss://gateway.plexus.company`   |
 
+## Agent skills
+
+`skills/` holds three skills that teach a coding agent the Plexus API — the
+endpoints, the live stream, and the mistakes that produce a silent 400.
+
+```bash
+cp -r skills/* ~/.claude/skills/
+```
+
+Then ask for what you want in plain language: *"send my ESP32's battery voltage
+to Plexus"*, *"build me a fleet dashboard"*. Plain Markdown, no install, no
+credentials. See [skills/README.md](skills/README.md).
+
 ## Architecture
 
 ```
