@@ -10,5 +10,5 @@ Plexus — thin Python SDK for sending telemetry to the Plexus gateway.
 from plexus.client import AuthenticationError, Plexus, PlexusError, read_mjpeg_frames
 from plexus.config import RetryConfig
 
-__version__ = "0.9.1"
+__version__ = "0.10.0"
 __all__ = ["AuthenticationError", "Plexus", "PlexusError", "RetryConfig", "read_mjpeg_frames"]

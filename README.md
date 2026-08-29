@@ -227,11 +227,12 @@ The SDK sends an `ack` frame before invoking the handler, then a `result` frame 
 
 ## Agent skills
 
-`skills/` holds three skills that teach a coding agent the Plexus API — the
-endpoints, the live stream, and the mistakes that produce a silent 400.
+Three skills ship with the package and teach a coding agent the Plexus API —
+the endpoints, the live stream, and the mistakes that produce a silent 400.
 
 ```bash
-cp -r skills/* ~/.claude/skills/
+plexus skills install          # -> ~/.claude/skills
+plexus skills install --project  # -> ./.claude/skills, travels with the repo
 ```
 
 Then ask for what you want in plain language: *"send my ESP32's battery voltage

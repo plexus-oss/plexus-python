@@ -2,7 +2,41 @@
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-28 - Agent skills
+
+### Added
+
+- **`plexus skills install`** — copies three bundled agent skills into
+  `~/.claude/skills` (or `./.claude/skills` with `--project`), so a coding
+  agent knows the Plexus API instead of inventing it. `--list` shows what
+  ships; `--dir` picks a target. Existing copies are refreshed and reported:
+  they are reference docs, and a stale one is the failure this fixes.
+
+- **The skills themselves**, in `skills/`: `plexus` (hosts, auth, every
+  endpoint, the live stream), `plexus-firmware` (device-side ingest), and
+  `plexus-dashboard` (read-API frontend scaffolding). They ship inside the
+  wheel at `plexus/_skills`; previously they reached the sdist only, which
+  lands in a temp build directory nobody looks in.
+
+- **`scripts/verify_skills.py`** — checks every route the skills quote against
+  the live OpenAPI spec and every WebSocket route by real handshake, with no
+  API key. It also asserts that routes documented as *dead* are still dead:
+  the skills name non-existent routes on purpose, because agents invent them
+  otherwise, and if one ever ships the warning has become a lie.
+
+- **`tests/test_skills.py`** — offline guards on request/response shape, plus
+  the CLI. Touches no network, per the `conftest.py` isolation rule.
+
 ### Fixed
+
+- The skills had drifted badly enough to generate broken code. The firmware
+  one keyed the ingest body `metrics` instead of `points`, omitted the
+  required `class` on every point, and sent ISO-8601 timestamp strings — every
+  template in it would have returned a 400. The dashboard one polled a route
+  that 404s and typed the query response as an array of points when it is
+  columnar. Both built their live-stream sections on a gateway URL that does
+  not exist; the stream is on the data API and authenticates by first message,
+  which means a browser can connect directly.
 
 - The test suite no longer reaches the production gateway. `plexus/config.py`
   defaults to `wss://gateway.plexus.company`, so every run opened real sockets to
