@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-01 - Batching, runs, and an end to silent drops
+
+### Added
+
+- **`px.batch()`** — a coalescing sender for anything faster than a few
+  readings a second. `send()` puts every reading in its own WebSocket frame,
+  and the gateway's telemetry ceiling counts *frames*: 500/s on a connection,
+  2000/s per source. Eight channels at 100 Hz sent one at a time is 800
+  frames/s, so roughly a third of it was discarded. Batched at 50 ms it is 20
+  frames/s. A background thread flushes on the interval, leaving the block
+  flushes the remainder, and readings keep the timestamp they were taken at.
+  Also the cheaper shape downstream — the loader moves ~400k rows/s at 100
+  points per message and ~65k at one.
+
+- **Runs** — `px.start_run()`, `px.end_run()` and `with px.run(...)`, against
+  the `/api/runs` routes that have existed for a while with nothing reaching
+  them. An exception leaving the `with` block closes the run as `aborted`.
+  Declared `pass_criteria` are now evaluated when the run closes, so
+  `end_run()` hands back a verdict in `test_result`.
+
+### Fixed
+
+- **`RATE_LIMITED` is no longer swallowed.** The gateway reports a discarded
+  telemetry frame asynchronously, after `send()` has already returned True.
+  The entire handling was a `logger.warning`, so a bench could lose a third of
+  its data with nothing to show for it. The transport now forwards server
+  error frames to the client, which counts them on `px.rate_limited_frames`
+  and raises `RateLimitedError` on the following send — after that send's own
+  points are away, so reporting the loss never causes more of it.
+
+### Changed
+
+- **`API.md` no longer claims runs do not exist.** It said "Removed / not
+  built … no such route exists in the gateway or platform" about routes that
+  do, which is the first thing anyone integrating would have read.
+
 ## [0.10.0] - 2026-08-28 - Agent skills
 
 ### Added

@@ -39,7 +39,9 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Generator
-from typing import Any, Union
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Union
 
 from plexus._log import _say
 from plexus.buffer import BufferBackend, MemoryBuffer, SqliteBuffer
@@ -52,7 +54,22 @@ from plexus.config import (
     get_source_id,
 )
 
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from plexus.batching import BatchSender
+
 logger = logging.getLogger(__name__)
+
+
+def _utc_now_iso() -> str:
+    """Now as ISO-8601 with a Z offset — the shape /api/runs validates."""
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace(
+        "+00:00", "Z"
+    )
+
+
+# Sentinel for `start_run(source_id=...)`: None is a meaningful value there
+# (an org-wide run with no source), so "not given" needs its own marker.
+_USE_CLIENT_SOURCE: Any = object()
 
 
 class _Response:
@@ -68,8 +85,18 @@ class _Session:
         self.headers: dict[str, str] = {}
 
     def post(self, url: str, data: bytes = b"", headers: dict[str, str] | None = None, timeout: float = 10.0) -> "_Response":
+        return self.request("POST", url, data=data, headers=headers, timeout=timeout)
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        data: bytes = b"",
+        headers: dict[str, str] | None = None,
+        timeout: float = 10.0,
+    ) -> "_Response":
         req_headers = {**self.headers, **(headers or {})}
-        req = urllib.request.Request(url, data=data, headers=req_headers, method="POST")
+        req = urllib.request.Request(url, data=data, headers=req_headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return _Response(resp.status, resp.read().decode("utf-8", errors="replace"))
@@ -136,6 +163,18 @@ class PlexusError(Exception):
 class AuthenticationError(PlexusError):
     """Raised when API key is missing or invalid."""
 
+
+class RateLimitedError(PlexusError):
+    """Raised when the gateway reported dropping telemetry for rate.
+
+    Raised on the send *after* the drop, not on the send that was dropped: the
+    gateway's `RATE_LIMITED` frame arrives asynchronously, well after the call
+    that produced the discarded frame returned True. Nothing can un-drop those
+    points — the value of the exception is that the loss stops being invisible,
+    which was the whole failure mode.
+
+    The fix is always to send fewer, larger frames — see `Plexus.batch()`.
+    """
 
 
 # The wire slug rule (gateway validate.go sourceIDPattern, max length =
@@ -268,6 +307,14 @@ class Plexus:
         self._announced_http_fallback = False
         self._announced_buffering = False
         self._send_count = 0
+
+        # Server-side drop accounting. Written from the WS read thread, read
+        # from the caller's, so it gets a lock rather than relying on the GIL
+        # for the announce-once flag.
+        self._server_error_lock = threading.Lock()
+        self._rate_limited_frames = 0
+        self._rate_limit_unreported = 0
+        self._announced_rate_limited = False
 
     @property
     def max_buffer_size(self):
@@ -468,6 +515,161 @@ class Plexus:
                 data_points.append(self._make_point(m, v, default_ts_ms, tags))
         return self._send_points(data_points)
 
+    def batch(
+        self,
+        interval_ms: float = 100.0,
+        max_points: int = 5000,
+        max_pending: int = 200_000,
+    ) -> "BatchSender":
+        """Return a sender that coalesces readings into one frame per interval.
+
+        Use this whenever readings arrive faster than a few times a second.
+        `send()` puts every reading in its own WebSocket frame, and the gateway
+        limits *frames*, not points — so eight channels at 100 Hz is 800
+        frames/s against a 500/s ceiling, and the overflow is discarded.
+        Batched, the same 800 readings/s is 10 frames/s.
+
+            with px.batch(interval_ms=50) as b:
+                while running:
+                    b.send("att.rate_x", gyro.x)
+                    b.send("frames.captured", grabber.count)
+
+        Leaving the block flushes what is queued. Args:
+            interval_ms: Flush cadence. Also the worst-case delivery latency.
+            max_points: Points per frame (the gateway's own ceiling is 10,000).
+            max_pending: Queue ceiling before the oldest points are dropped;
+                only reachable when the gateway has been unreachable for a
+                long time. Drops are counted on `BatchSender.dropped`.
+        """
+        from plexus.batching import BatchSender
+
+        return BatchSender(
+            self,
+            interval_ms=interval_ms,
+            max_points=max_points,
+            max_pending=max_pending,
+        )
+
+    # ------------------------------------------------------------------- runs
+
+    def start_run(
+        self,
+        name: str,
+        source_id: str | None = _USE_CLIENT_SOURCE,
+        tags: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+        pass_criteria: list[dict[str, Any]] | None = None,
+        started_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Open a test run and return it. The run stays `active` until ended.
+
+        A run is a named window on a source — start it when the bench starts,
+        end it when the bench stops, and the window is then recallable on
+        /runs, comparable against any other run aligned at T+0, and evaluated
+        against `pass_criteria` on close.
+
+        Args:
+            name: Human-readable run name, e.g. "hotfire-2026-09-01-03".
+            source_id: Source slug the run belongs to. Defaults to this
+                client's source; pass None for an org-wide run.
+            tags: Free-form labels, e.g. {"build": "a41f", "operator": "kt"}.
+            metadata: Anything else worth keeping with the run.
+            pass_criteria: Limits to evaluate when the run closes, as
+                [{"metric": "motor.temp_c", "operator": "<", "value": 85,
+                  "label": "motor stays cool"}]. Operators: > >= < <= = !=.
+                Each is checked against the run window's values for that
+                metric; the verdict lands on the run's `test_result`.
+            started_at: ISO-8601 start. Defaults to now.
+
+        Returns:
+            The created run dict, including its "id".
+        """
+        body: dict[str, Any] = {"name": name, "started_at": started_at or _utc_now_iso()}
+        if source_id is not _USE_CLIENT_SOURCE:
+            body["source_id"] = source_id
+        else:
+            body["source_id"] = self.source_id
+        if tags:
+            body["tags"] = tags
+        if metadata:
+            body["metadata"] = metadata
+        if pass_criteria:
+            body["pass_criteria"] = pass_criteria
+        return self._api("POST", "/api/runs", body)["run"]
+
+    def end_run(
+        self,
+        run: dict[str, Any] | str,
+        status: str = "completed",
+        ended_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Close a run. Accepts the dict from `start_run()` or a run id.
+
+        Args:
+            run: The run to close.
+            status: "completed" (default) or "aborted".
+            ended_at: ISO-8601 end. Defaults to now.
+
+        Returns:
+            The updated run, with `test_result` populated when the run
+            declared `pass_criteria`.
+        """
+        run_id = run if isinstance(run, str) else run.get("id")
+        if not run_id:
+            raise PlexusError("end_run needs a run id (pass the dict from start_run)")
+        return self._api(
+            "PATCH",
+            f"/api/runs/{run_id}",
+            {"status": status, "ended_at": ended_at or _utc_now_iso()},
+        )["run"]
+
+    @contextmanager
+    def run(self, name: str, **kwargs: Any) -> Generator[dict[str, Any], None, None]:
+        """Open a run for the duration of the block, then close it.
+
+            with px.run("hotfire-03", pass_criteria=[
+                {"metric": "motor.temp_c", "operator": "<", "value": 85},
+            ]) as r:
+                bench.execute()
+
+        An exception leaving the block closes the run as "aborted" and
+        re-raises; a clean exit closes it as "completed". Takes the same
+        keyword arguments as `start_run()`.
+        """
+        opened = self.start_run(name, **kwargs)
+        try:
+            yield opened
+        except BaseException:
+            # Best-effort: an unreachable app API must not replace the
+            # caller's exception with a networking one.
+            try:
+                self.end_run(opened, status="aborted")
+            except Exception as e:
+                logger.warning("failed to close run %s as aborted: %s", opened.get("id"), e)
+            raise
+        self.end_run(opened, status="completed")
+
+    def _api(self, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Call the Plexus app API (not the gateway) with this client's key."""
+        session = self._get_session()
+        data = json.dumps(body or {}).encode("utf-8")
+        resp = session.request(
+            method, f"{self.endpoint}{path}", data=data, timeout=self.timeout
+        )
+        if resp.status_code in (401, 403):
+            raise AuthenticationError(
+                f"{method} {path} rejected the API key ({resp.status_code}). "
+                "The key needs to belong to the same org as the source."
+            )
+        if resp.status_code >= 400:
+            raise PlexusError(f"{method} {path} failed ({resp.status_code}): {resp.text[:400]}")
+        if not resp.text:
+            return {}
+        try:
+            return json.loads(resp.text)
+        except ValueError as e:
+            raise PlexusError(f"{method} {path} returned non-JSON: {resp.text[:200]}") from e
+
     def _ensure_ws(self):
         """Lazily construct and start the WebSocket transport."""
         if self._ws is not None:
@@ -480,6 +682,7 @@ class Plexus:
             ws_url=self._ws_url,
             agent_version=__version__,
             on_clock_synced=self._on_clock_synced,
+            on_server_error=self._on_server_error,
         )
         self._ws.start()
         return self._ws
@@ -489,6 +692,58 @@ class Plexus:
 
     def _on_clock_synced(self, offset_ms: int) -> None:
         self._clock_offset_ms = offset_ms
+
+    def _on_server_error(self, code: str, detail: str) -> None:
+        """Handle an error frame from the gateway. Runs on the WS read thread.
+
+        RATE_LIMITED is the one that has to be loud. It means a telemetry frame
+        the socket accepted was thrown away upstream, and the send that
+        produced it already returned True — so unless this is surfaced, a bench
+        can lose a third of its data and see nothing but a debug log.
+        """
+        if code != "RATE_LIMITED":
+            return
+        with self._server_error_lock:
+            self._rate_limited_frames += 1
+            self._rate_limit_unreported += 1
+            first = not self._announced_rate_limited
+            self._announced_rate_limited = True
+        if first:
+            _say(
+                "⚠ Gateway is dropping telemetry frames (RATE_LIMITED). You are "
+                "sending more messages per second than the connection allows — "
+                "the points in those frames are gone. Batch them instead: "
+                "`with px.batch() as b: b.send(...)`."
+            )
+
+    @property
+    def rate_limited_frames(self) -> int:
+        """Telemetry frames the gateway reported dropping for rate.
+
+        Non-zero means data loss. Each frame carried at least one point.
+        """
+        with self._server_error_lock:
+            return self._rate_limited_frames
+
+    def _raise_if_rate_limited(self) -> None:
+        """Convert pending RATE_LIMITED notices into an exception, once each.
+
+        Called at the top of a send so the loss surfaces on the caller's own
+        thread. Consuming the counter means one raise per burst rather than a
+        permanent failure state — the caller has been told; if they keep
+        overrunning, they get told again.
+        """
+        with self._server_error_lock:
+            pending = self._rate_limit_unreported
+            self._rate_limit_unreported = 0
+        if pending:
+            raise RateLimitedError(
+                f"Gateway dropped {pending} telemetry frame"
+                f"{'s' if pending != 1 else ''} for exceeding the per-connection "
+                "message rate; those points were lost. Send fewer, larger "
+                "frames — `with px.batch() as b: b.send(...)` — rather than one "
+                "frame per reading."
+            )
 
     def _encode_frame(self, frame, quality: int) -> tuple[bytes, int, int]:
         """Normalize any supported frame type to (jpeg_bytes, width, height).
@@ -835,6 +1090,10 @@ class Plexus:
                 batch.extend(pending_new[:take])
                 pending_new = pending_new[take:]
             if not batch:
+                # Everything for this call is away. Only now report frames the
+                # gateway dropped earlier: raising before the loop would strand
+                # this call's points, which is the failure we are reporting.
+                self._raise_if_rate_limited()
                 return True
             try:
                 self._send_chunk(ws, batch)

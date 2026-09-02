@@ -18,8 +18,14 @@ uses the `authenticated` frame only for the `server_time_ms` clock sync.
     client → {"type": "command_result", "id": ..., "command": ..., "event": "ack"}
     client → {"type": "command_result", "id": ..., "command": ...,
               "event": "result" | "error", "result": {...} | "error": "..."}
+    server → {"type": "error", "code": "RATE_LIMITED" | ..., "detail": "..."}
 
 Runs the read loop on a background daemon thread so callers can stay sync.
+
+Server `error` frames are forwarded to `on_server_error` rather than only
+logged. They are the sole notice that a frame the socket already accepted was
+dropped upstream — `send()` returned True long before the gateway decided —
+so a caller that cannot see them cannot know it is losing data.
 """
 
 from __future__ import annotations
@@ -98,6 +104,7 @@ class WebSocketTransport:
         platform: str = "python-sdk",
         auto_reconnect: bool = True,
         on_clock_synced: Callable[[int], None] | None = None,
+        on_server_error: Callable[[str, str], None] | None = None,
     ):
         if not api_key:
             raise ValueError("api_key required")
@@ -111,6 +118,7 @@ class WebSocketTransport:
         self.platform = platform
         self.auto_reconnect = auto_reconnect
         self._on_clock_synced = on_clock_synced
+        self._on_server_error = on_server_error
 
         self._commands: dict[str, _RegisteredCommand] = {}
         self._ws: websocket.WebSocket | None = None
@@ -369,7 +377,14 @@ class WebSocketTransport:
         if mtype == "typed_command":
             self._handle_command(msg)
         elif mtype == "error":
-            logger.warning("plexus ws server error: %s", msg.get("detail") or msg)
+            code = str(msg.get("code") or "")
+            detail = str(msg.get("detail") or "")
+            logger.warning("plexus ws server error: %s %s", code or "?", detail or msg)
+            if self._on_server_error is not None:
+                try:
+                    self._on_server_error(code, detail)
+                except Exception:  # never let a callback kill the read loop
+                    logger.exception("on_server_error callback raised")
         # ignore unknown types — forward-compat
 
     def _handle_command(self, msg: dict[str, Any]) -> None:
