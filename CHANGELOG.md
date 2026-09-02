@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-09-02 - Correct what the agent skills teach
+
+### Fixed
+
+- **`plexus-firmware` claimed the SDK batches. It does not.** Of CPython
+  targets — naming Jetson and embedded Linux specifically — the skill said
+  "stop and use the SDK instead ... It already does batching". `send()` is one
+  message per call, the gateway's ceiling counts messages, and the overflow is
+  discarded asynchronously after the send returned True. The skills are how a
+  coding agent learns this API instead of inventing it, so that line aimed
+  agents at silent data loss on exactly the hardware most likely to hit bench
+  rates. Both skills now carry the real ceilings and point at `px.batch()`.
+
+- **Runs were documented in no skill**, so an agent had no way to know a test
+  bench should name its window. The `plexus` skill now carries the contract:
+  the app host rather than the gateway, offset-bearing timestamps, the
+  operators, and the two semantics that surprise people — every sample must
+  satisfy a criterion, and a metric with no data in the window fails rather
+  than passes.
+
+- **The documented slug rule was wrong** (`^[a-z0-9][a-z0-9_-]{1,62}$`). The
+  gateway accepts dots, single characters and 256 bytes, so an agent applying
+  the documented rule would reject slugs the platform takes.
+
 ## [0.11.0] - 2026-09-01 - Batching, runs, and an end to silent drops
 
 ### Added
