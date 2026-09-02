@@ -156,12 +156,54 @@ When asked to "set up Plexus" in a project, do this:
 5. **Add a single usage example** in the project — one obvious place, not five — so they can verify it works.
 6. **Update README** with a short section: "Set `PLEXUS_API_KEY`, then run X."
 
+## Runs
+
+A **run** is a named time window on a source — a hot-fire, a bench sequence, a
+flight. Runs are recalled on `/runs`, compared against each other aligned at
+T+0, and evaluated against declared pass criteria on close. Test-bench software
+should open one when a test starts and close it when the test ends, rather than
+expecting somebody to drag a time picker afterwards.
+
+These live on the **app** host (`https://app.plexus.company`), not the gateway,
+and take the same `x-api-key`.
+
+```
+POST  /api/runs           {name, source_id, started_at, pass_criteria?, tags?}
+PATCH /api/runs/{id}      {status: "completed"|"aborted", ended_at}
+GET   /api/runs           ?source_id=&status=
+```
+
+`started_at` / `ended_at` are ISO-8601 **with an offset** (`...Z` is fine); a
+naive local timestamp is a 400.
+
+In plexus-python (>= 0.11.0) this is `px.start_run()` / `px.end_run()`, or:
+
+```python
+with px.run("hotfire-03", pass_criteria=[
+    {"metric": "motor.temp_c", "operator": "<", "value": 85},
+]):
+    bench.execute()
+```
+
+An exception leaving the block closes the run `aborted`; a clean exit closes it
+`completed`.
+
+**Pass criteria** are `{metric, operator, value, label?}` with operator one of
+`> >= < <= = !=`. On close, every sample of that metric inside the window is
+checked. A criterion passes only if *all* of them satisfy it — one excursion
+fails it — and a criterion whose metric has no data in the window **fails**
+rather than passing. The verdict lands on the run's `test_result`.
+
+Criteria are evaluated against stored telemetry, which trails ingest by a few
+seconds. A run closed the instant its last point is sent may read "no data";
+let the pipeline settle first.
+
 ## Idioms
 
 - **Polling cadences for dashboards**: latest values 5s, charts 10s, fleet health 10s, source list 30s. Use SWR or TanStack Query with `refreshInterval`.
 - **Time ranges**: prefer `last=1h` (relative) over `start`/`end` (absolute) — easier to reason about and less timezone footgun. `start`/`end` are ISO date-times, not epoch ms.
-- **Batching ingest**: buffer up to 64 points or 5 seconds, whichever first. On 429 / 5xx, exponential backoff with max 3 attempts.
-- **Source IDs are slugs**: `drone-001`, `sat-alpha-3`. Must match `^[a-z0-9][a-z0-9_-]{1,62}$`. Stable, lowercase, hyphenated. Don't use UUIDs in user-facing surfaces.
+- **Batching ingest**: the gateway meters **messages, not points** — 500/s per WebSocket connection, 2000/s per source, up to 10,000 points in one message. Buffer up to 64 points or 5 seconds, whichever first. One send per reading at bench rates exceeds the limit and the overflow is *discarded*, reported asynchronously as `RATE_LIMITED` after the send returned. In plexus-python use `px.batch(interval_ms=50)`; `px.send()` alone is one message per call. On 429 / 5xx, exponential backoff with max 3 attempts.
+- **Source IDs are slugs**: `drone-001`, `sat-alpha-3`, `bench.rig-2`. Must match `^[a-z0-9][a-z0-9._-]*$`, up to 256 characters — dots are legal and a single character is legal. A uuid-shaped slug is rejected: every resolver reads uuid-shaped refs as internal ids, so such a source would be unreachable. Stable, lowercase.
 - **Source IDs are not deduplicated.** The gateway writes whatever `source_id` you declare. Two devices declaring the same name merge into one source.
 - **Metric names are opaque and may be long.** Anything that round-trips a name must use the identical string on both sides or the series and its metadata will not join.
 
@@ -180,4 +222,7 @@ When asked to "set up Plexus" in a project, do this:
 
 Fetch `https://plexus-data-api.fly.dev/openapi.json` for the authoritative HTTP schema (it will not show WebSocket routes), and check a real response before writing parsing code. `scripts/verify_skills.py` in this repo checks these docs against the live spec — run it if something here looks stale.
 
-This cheat sheet has drifted before. Corrected 2026-08-27 against Data API 0.1.0 (ingest array name, `sources`/`devices` paths, removed per-source health, columnar query) and again 2026-08-28 against gateway + API source (the live-stream host/path/auth/frame shape, the required `class` field, numeric-only timestamps, the redirect chain, and the now-fixed 1970 timestamp behavior).
+This cheat sheet has drifted before. Corrected 2026-09-01 against the shipped
+gateway and app (runs API — which an earlier revision of API.md wrongly said did
+not exist; message-not-point metering and `px.batch()`; the real slug rule,
+which permits dots, single characters and 256 bytes). Corrected 2026-08-27 against Data API 0.1.0 (ingest array name, `sources`/`devices` paths, removed per-source health, columnar query) and again 2026-08-28 against gateway + API source (the live-stream host/path/auth/frame shape, the required `class` field, numeric-only timestamps, the redirect chain, and the now-fixed 1970 timestamp behavior).
