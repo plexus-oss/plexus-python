@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-09-02 - Stamp run boundaries on the server's clock
+
+### Fixed
+
+- **A run's window was measured by a different clock than the points inside
+  it.** `_normalize_ts_ms` corrects generated timestamps by the offset the
+  gateway reports on connect; `start_run` / `end_run` read the local clock
+  instead. Every point taken in the final `offset` milliseconds of a run
+  therefore landed *after* `ended_at` and fell outside the window its own run
+  was evaluated over.
+
+  Measured on production: a device running 58ms behind the server sent 300
+  points and its run was judged on 284 of them. The shortfall reads exactly
+  like ingest lag, which is what it was mistaken for — a pass criterion can
+  come back green because the excursion that would have failed it was outside
+  the window by 58 milliseconds. Run boundaries now carry the same correction
+  as the telemetry. An explicitly passed `started_at` / `ended_at` is still
+  left alone.
+
 ## [0.11.1] - 2026-09-02 - Correct what the agent skills teach
 
 ### Fixed
