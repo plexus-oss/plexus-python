@@ -111,9 +111,48 @@ x-api-key: plx_xxxxx
 | object  | `{"x": 1.2, "y": 3.4, "z": 5.6}` | Vector data, structured readings |
 | array   | `[1.0, 2.0, 3.0, 4.0]`           | Waveforms, multiple values       |
 
-### Sessions
+### Runs
 
-> **Removed / not built.** There is no sessions or runs REST API (`POST /api/sessions`, `POST /api/runs`) — no such route exists in the gateway or platform, and the SDK's former `run()` context has been removed. To group a slice of data, use plain `tags` on each point.
+A **run** is a named time window on a source — a hot-fire, a bench sequence, a
+flight. Runs are recalled on `/runs`, compared against each other aligned at
+T+0, and evaluated against declared pass criteria when they close.
+
+The SDK opens and closes them, so the software driving the bench owns the
+window rather than someone remembering to drag a time-range picker afterwards:
+
+```python
+with px.run("hotfire-03", pass_criteria=[
+    {"metric": "motor.temp_c", "operator": "<", "value": 85, "label": "motor stays cool"},
+    {"metric": "frames.dropped", "operator": "=", "value": 0},
+]) as run:
+    bench.execute()
+
+print(run["id"])
+```
+
+Leaving the block closes the run as `completed`; an exception closes it as
+`aborted` and re-raises. For a bench that starts and stops from different
+places, call the two halves directly:
+
+```python
+run = px.start_run("hotfire-03", tags={"build": "a41f"})
+...
+result = px.end_run(run)             # or px.end_run(run, status="aborted")
+print(result["test_result"])          # {"passed": bool, "criteria_results": [...]}
+```
+
+`start_run()` defaults `source_id` to the client's source; pass
+`source_id=None` for an org-wide run. Underneath these are `POST /api/runs`
+and `PATCH /api/runs/{id}` on the app API (not the gateway), authenticated
+with the same `x-api-key`.
+
+**Pass criteria.** Each is `{metric, operator, value, label?}` with operator
+one of `> >= < <= = !=`. On close, every point for that metric inside the run
+window is checked; the criterion passes only if all of them satisfy it, and a
+criterion whose metric has no data in the window fails. The verdict is stored
+on the run's `test_result` and shown on `/runs`.
+
+To group data without a window, plain `tags` on each point still work.
 
 ## WebSocket API
 
@@ -367,6 +406,51 @@ while True:
 | 404    | Resource not found              |
 | 410    | Resource expired                |
 
+## Rate limits and batching
+
+The gateway meters **messages**, not points. One `px.send()` call is one
+message, whatever it carries:
+
+| Limit                              | Value            |
+| ---------------------------------- | ---------------- |
+| Telemetry messages per WS connection | 500/s sustained, 2000 burst |
+| Hard ceiling per source (WS + HTTP) | 2000 messages/s  |
+| Points per message                 | 10,000           |
+| Message size                       | 1 MB             |
+
+Because the ceiling counts messages, the shape of your sends decides whether
+you hit it. Eight channels at 100 Hz sent one at a time is 800 messages/s —
+over the limit. The same 800 readings/s batched every 100 ms is 10 messages/s,
+and the batches are also several times cheaper to store.
+
+**Over the limit, the gateway discards the whole message.** It replies with a
+`RATE_LIMITED` error frame, but that arrives after `send()` has already
+returned — those points are gone and cannot be resent. The SDK counts the
+notices (`px.rate_limited_frames`) and raises `RateLimitedError` on the next
+send so the loss cannot pass unnoticed, but the only real fix is to send
+fewer, larger messages.
+
+Use `px.batch()` for anything above a few readings per second:
+
+```python
+with px.batch(interval_ms=50) as b:
+    while running:
+        b.send("att.pos_x", att.x)
+        b.send("att.rate_x", gyro.x)
+        b.send("frames.captured", grabber.count)
+```
+
+`b.send()` takes the same arguments as `px.send()` and queues the reading; a
+background thread flushes the queue on the interval, and leaving the block
+flushes what is left. A failed flush leaves the points in the local
+store-and-forward buffer, so nothing is dropped for a transient outage — the
+one bounded exception is `max_pending` (default 200,000 points), reached only
+when the gateway has been unreachable for a long time, and counted on
+`BatchSender.dropped`.
+
+If you are already accumulating readings yourself, `px.send_batch([...])`
+sends a list in one message without the background thread.
+
 ## Clock correction
 
 Embedded devices commonly boot with a wrong system clock — no hardware RTC, NTP unreachable on first boot, or a fresh OS image whose filesystem timestamp is months in the past. Without correction, all telemetry lands at the wrong place on the timeline.
@@ -401,7 +485,7 @@ px.send("temperature", 72.5, timestamp=t)        # your timestamp → used as-is
 
 ## Best Practices
 
-- **Batch points** - Send up to 100 points per request for HTTP
+- **Batch above a few readings per second** - `px.batch()` coalesces into one message per interval; the gateway's ceiling counts messages, not points (see [Rate limits and batching](#rate-limits-and-batching))
 - **Omit timestamp when unsure** - The Python SDK applies server-synced clock correction when `timestamp` is omitted over WebSocket; only pass an explicit timestamp when you have a reliable wall-clock source
 - **Consistent source_id** - Use the same ID for each physical device/source
 - **Use tags** - Label data for filtering and grouping (e.g., `{"location": "lab"}`)

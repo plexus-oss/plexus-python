@@ -76,6 +76,35 @@ px.send_batch([
 
 `points` is a list of `(metric, value)` tuples, or `(metric, value, timestamp)` 3-tuples when you need a per-point timestamp. Points without their own timestamp share the batch timestamp (now, unless you pass `timestamp=t`).
 
+### `batch()` — coalesce a fast stream of readings
+
+Use this above a few readings per second. Every `send()` is one WebSocket message, and the gateway limits **messages**, not points — 500/s on a connection. Eight channels at 100 Hz sent one at a time is 800 messages/s, and the overflow is discarded before it is stored.
+
+```python
+with px.batch(interval_ms=50) as b:
+    while running:
+        b.send("att.pos_x", att.x)
+        b.send("att.rate_x", gyro.x)
+        b.send("frames.captured", grabber.count)
+```
+
+`b.send()` takes the same arguments as `px.send()`. A background thread flushes the queue every `interval_ms`, and leaving the block flushes what is left, so nothing is stranded. Readings keep the timestamp they were taken at, not the one they were flushed at.
+
+If the gateway does discard frames it reports `RATE_LIMITED`; the SDK counts those on `px.rate_limited_frames` and raises `RateLimitedError` on the next send rather than letting the loss pass unnoticed.
+
+### `run(name)` — mark a test run
+
+A run is a named window on a source. Runs are recalled on `/runs`, compared against each other aligned at T+0, and checked against their pass criteria when they close.
+
+```python
+with px.run("hotfire-03", pass_criteria=[
+    {"metric": "motor.temp_c", "operator": "<", "value": 85},
+]) as run:
+    bench.execute()
+```
+
+Leaving the block closes the run as `completed`; an exception closes it as `aborted` and re-raises. Use `px.start_run()` / `px.end_run()` when the two halves happen in different places — `end_run()` returns the run with its verdict in `test_result`.
+
 ### `event(name, data)` — record a discrete occurrence
 
 Use `event()` for things that *happen* rather than things you *measure continuously*. Faults, state transitions, operator actions, log entries — anything you'd put on a timeline as a marker rather than plot as a graph.
