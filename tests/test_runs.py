@@ -10,6 +10,7 @@ The HTTP layer is stubbed at `_Session.request`, so no socket is opened.
 """
 
 import json
+import time
 
 import pytest
 
@@ -70,6 +71,47 @@ def test_started_at_matches_the_shape_the_route_validates():
     from datetime import datetime
 
     datetime.fromisoformat(started.replace("Z", "+00:00"))  # parses or raises
+
+
+def test_run_boundaries_are_stamped_on_the_server_clock():
+    """The window must be measured by the same clock as the points inside it.
+
+    `_normalize_ts_ms` corrects generated timestamps by the offset the gateway
+    reports on connect. Stamping run boundaries from the local clock instead
+    leaves `ended_at` behind every point taken in the final `offset`
+    milliseconds — and those points then fall outside the window their own run
+    is evaluated over. Measured on production before the fix: a 300-point run
+    on a device 58ms behind the server was judged on 284 of them, and the
+    shortfall reads exactly like ingest lag.
+    """
+    from datetime import datetime
+
+    session = _StubSession()
+    px = _client(session)
+    px._clock_offset_ms = 5_000  # device 5s behind the server
+
+    px.start_run("run")
+    px.end_run({"id": "run_1"})
+
+    def as_ms(iso: str) -> int:
+        return int(datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp() * 1000)
+
+    local_ms = int(time.time() * 1000)
+    started = as_ms(session.calls[0][2]["started_at"])
+    ended = as_ms(session.calls[1][2]["ended_at"])
+
+    # Both carry the offset, so they bound points that also carry it.
+    assert started - local_ms > 4_000
+    assert ended - local_ms > 4_000
+
+
+def test_an_explicit_boundary_is_left_alone():
+    """A caller passing its own timestamp owns it — we do not shift it."""
+    session = _StubSession()
+    px = _client(session)
+    px._clock_offset_ms = 5_000
+    px.start_run("run", started_at="2026-09-01T10:00:00.000Z")
+    assert session.calls[0][2]["started_at"] == "2026-09-01T10:00:00.000Z"
 
 
 def test_run_defaults_to_the_clients_own_source():

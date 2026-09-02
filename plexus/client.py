@@ -60,10 +60,12 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 logger = logging.getLogger(__name__)
 
 
-def _utc_now_iso() -> str:
-    """Now as ISO-8601 with a Z offset — the shape /api/runs validates."""
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace(
-        "+00:00", "Z"
+def _iso_from_ms(ms: int) -> str:
+    """Epoch milliseconds as ISO-8601 with a Z offset — /api/runs validates the shape."""
+    return (
+        datetime.fromtimestamp(ms / 1000, timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
     )
 
 
@@ -350,6 +352,22 @@ class Plexus:
             return int(timestamp * 1000)
         return int(timestamp)
 
+    def _now_iso(self) -> str:
+        """Now on the SERVER's clock, as ISO-8601.
+
+        Run boundaries have to be stamped on the same clock as the telemetry
+        they bound, and `_normalize_ts_ms` corrects generated timestamps by the
+        offset the gateway reports on connect. Reading the local clock here
+        instead — which this did — leaves `ended_at` behind every point taken
+        in the final `offset` milliseconds of the run, and those points then
+        fall outside the window their own run is evaluated over.
+
+        The failure is quiet and looks like something else entirely: on a
+        device running 58ms behind the server, a 300-point run was evaluated
+        over 284 of them, and the shortfall reads exactly like ingest lag.
+        """
+        return _iso_from_ms(int(time.time() * 1000) + self._clock_offset_ms)
+
     @staticmethod
     def _infer_class(value: FlexValue) -> str:
         """Numbers are metrics; everything else (str/bool/dict/list) is an event.
@@ -584,7 +602,10 @@ class Plexus:
         Returns:
             The created run dict, including its "id".
         """
-        body: dict[str, Any] = {"name": name, "started_at": started_at or _utc_now_iso()}
+        body: dict[str, Any] = {
+            "name": name,
+            "started_at": started_at or self._now_iso(),
+        }
         if source_id is not _USE_CLIENT_SOURCE:
             body["source_id"] = source_id
         else:
@@ -664,7 +685,7 @@ class Plexus:
         return self._api(
             "PATCH",
             f"/api/runs/{run_id}",
-            {"status": status, "ended_at": ended_at or _utc_now_iso()},
+            {"status": status, "ended_at": ended_at or self._now_iso()},
         )["run"]
 
     @contextmanager
