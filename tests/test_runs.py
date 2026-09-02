@@ -163,6 +163,64 @@ def test_a_failed_close_does_not_replace_the_callers_exception():
             1 / 0
 
 
+def test_a_fresh_bench_registers_its_source_then_opens_the_run():
+    """The order a bench actually works in: open the run, THEN stream.
+
+    The source does not exist until its first point, so the route 404s on a
+    bench that has not started yet — which is every bench, on its first run.
+    """
+    calls: list[tuple[str, str, dict]] = []
+
+    class _FreshBench(_StubSession):
+        def request(self, method, url, data=b"", headers=None, timeout=10.0):
+            body = json.loads(data.decode()) if data else {}
+            calls.append((method, url, body))
+            if url.endswith("/api/sources"):
+                return _Response(201, json.dumps({"source": {"slug": "bench-01"}}))
+            if url.endswith("/api/runs") and len([c for c in calls if c[1].endswith("/api/runs")]) == 1:
+                return _Response(404, '{"error":"NOT_FOUND","message":"Device not found"}')
+            return _Response(201, json.dumps({"run": {"id": "run_1"}}))
+
+    px = _client(_FreshBench())
+    run = px.start_run("first-ever-run")
+
+    assert run["id"] == "run_1"
+    assert [c[1].rsplit("/", 1)[-1] for c in calls] == ["runs", "sources", "runs"]
+    assert calls[1][2]["slug"] == "bench-01"
+    assert calls[1][2]["source_type"] == "device"
+
+
+def test_an_unknown_explicit_source_still_404s():
+    """Only the client's OWN source is auto-registered. A source_id someone
+    typed by hand is far more likely a typo than a bench that hasn't started,
+    and silently creating it would hide the mistake."""
+    session = _StubSession({"POST": _Response(404, '{"error":"NOT_FOUND"}')})
+    px = _client(session)
+
+    with pytest.raises(PlexusError):
+        px.start_run("run", source_id="probably-a-typo")
+
+    # One attempt, no source creation.
+    assert len(session.calls) == 1
+
+
+def test_a_source_that_already_exists_is_not_an_error():
+    """The gateway auto-creates on first point too, so start_run can race it."""
+    class _Conflict(_StubSession):
+        def request(self, method, url, data=b"", headers=None, timeout=10.0):
+            body = json.loads(data.decode()) if data else {}
+            self.calls.append((method, url, body))
+            runs_calls = [c for c in self.calls if c[1].endswith("/api/runs")]
+            if url.endswith("/api/sources"):
+                return _Response(409, '{"error":"Source already exists"}')
+            if len(runs_calls) == 1:
+                return _Response(404, '{"error":"NOT_FOUND"}')
+            return _Response(201, json.dumps({"run": {"id": "run_1"}}))
+
+    px = _client(_Conflict())
+    assert px.start_run("run")["id"] == "run_1"
+
+
 def test_rejected_key_raises_authentication_error():
     session = _StubSession({"POST": _Response(401, '{"error":"Invalid API key"}')})
     px = _client(session)
