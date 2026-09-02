@@ -31,6 +31,7 @@ import threading
 import urllib.parse
 import webbrowser
 from pathlib import Path
+from typing import Any
 
 from . import config
 
@@ -428,8 +429,15 @@ def cmd_logout(_args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_whoami(_args: argparse.Namespace) -> int:
-    """Print the prefix of the locally stored key + the configured endpoint."""
+def cmd_whoami(args: argparse.Namespace) -> int:
+    """Report the local key, and whether the server still accepts it.
+
+    Printing the key alone was worse than printing nothing: a revoked or
+    expired credential produced confident-looking output and a zero exit, and
+    the 401s that followed from the SDK looked unrelated. `whoami` is what
+    someone runs precisely when they suspect their auth — it has to answer
+    that question rather than confirm a file exists.
+    """
     key = config.get_api_key()
     endpoint = config.get_endpoint()
     if not key:
@@ -438,7 +446,60 @@ def cmd_whoami(_args: argparse.Namespace) -> int:
     masked = f"{key[:8]}…{key[-4:]}" if len(key) > 12 else key
     print(f"key:      {masked}")
     print(f"endpoint: {endpoint}")
-    return 0
+
+    if args.no_verify:
+        return 0
+
+    status, body = _verify_key(endpoint, key)
+    if status == 200:
+        org = body.get("org_id") or "unknown"
+        scopes = ", ".join(body.get("scopes") or []) or "default"
+        print(f"org:      {org}")
+        print(f"scopes:   {scopes}")
+        print("status:   valid")
+        return 0
+    if status == 401:
+        print("status:   REJECTED — this key is invalid, revoked or expired.")
+        print("          Run `plexus init --force` to authorize this machine again.")
+        return 1
+    if status == 403:
+        print("status:   DISABLED — the key is real but access is switched off.")
+        print("          Usually billing; check with your org admin.")
+        return 1
+    if status is None:
+        # Could not ask. Say so rather than implying either answer.
+        print(f"status:   unknown — could not reach {endpoint} ({body})")
+        return 0
+    print(f"status:   unexpected response ({status})")
+    return 1
+
+
+def _verify_key(endpoint: str, key: str) -> tuple[int | None, Any]:
+    """Ask the server whether a key is good. Returns (status, parsed_or_reason).
+
+    A network failure returns (None, reason): unreachable is not the same as
+    rejected, and reporting one as the other is how a flaky connection gets
+    mistaken for a credentials problem.
+    """
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(
+        f"{endpoint.rstrip('/')}/api/auth/verify-key",
+        headers={"x-api-key": key},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status, _json.loads(resp.read().decode() or "{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, _json.loads(e.read().decode() or "{}")
+        except Exception:
+            return e.code, {}
+    except Exception as e:  # DNS, TLS, timeout, offline
+        return None, str(e)
 
 
 def _bundled_skills_dir() -> Path | None:
@@ -507,10 +568,49 @@ def _default_skills_target(args: argparse.Namespace) -> Path:
     return Path.home() / ".claude" / "skills"
 
 
+class _VersionAwareParser(argparse.ArgumentParser):
+    """Turns an unknown subcommand into a version diagnosis.
+
+    argparse says `invalid choice: 'skills'` and stops. When the real cause is
+    an old install — a pipx shim from months ago shadowing a fresh pip
+    install, say — that message sends people looking for a typo instead of at
+    their version. The command they were told to run genuinely does not exist
+    *here*, and the fix is an upgrade, so say which version is running and how
+    to move it.
+    """
+
+    def error(self, message: str) -> None:  # type: ignore[override]
+        if "invalid choice" in message:
+            from plexus import __version__
+
+            self.print_usage(sys.stderr)
+            print(f"\n{self.prog}: error: {message}", file=sys.stderr)
+            print(
+                f"\nYou are running plexus-python {__version__}. If you were "
+                "following a doc that\nnames this command, your install is "
+                "probably older than the doc:\n"
+                "\n    pip install --upgrade plexus-python"
+                "\n    pipx upgrade plexus-python      # if you installed with pipx"
+                "\n\nThen check with: plexus --version",
+                file=sys.stderr,
+            )
+            self.exit(2)
+        super().error(message)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    from plexus import __version__
+
+    parser = _VersionAwareParser(
         prog="plexus",
         description="Plexus CLI — auth, send, query telemetry from your terminal.",
+    )
+    # The first thing anyone types when a CLI misbehaves, and previously an
+    # error: `plexus --version` demanded a subcommand and told you nothing.
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"plexus-python {__version__}",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -537,6 +637,11 @@ def build_parser() -> argparse.ArgumentParser:
     logout.set_defaults(func=cmd_logout)
 
     whoami = sub.add_parser("whoami", help="Show the local credential summary.")
+    whoami.add_argument(
+        "--no-verify",
+        action="store_true",
+        help="Skip the server check and only print what is stored locally.",
+    )
     whoami.set_defaults(func=cmd_whoami)
 
     skills = sub.add_parser(

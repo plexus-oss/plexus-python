@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-09-02 - Let the CLI diagnose the CLI
+
+All three of these came out of one evening of actually using it.
+
+### Added
+
+- **`plexus --version`.** It previously exited 2 with "the following
+  arguments are required: command" — the least useful possible reply to the
+  first thing anyone types when a CLI misbehaves.
+
+### Fixed
+
+- **An unknown subcommand now names the running version and the upgrade.**
+  `invalid choice: 'skills'` sends people hunting for a typo when the real
+  cause is an old install — a pipx shim from four months earlier shadowing a
+  fresh `pip install`, in the case that prompted this. The command genuinely
+  does not exist *there*, and the fix is an upgrade, so the error says which
+  version is running and gives both the pip and pipx forms.
+
+- **`whoami` now asks the server whether the key is actually good.** It used
+  to print the local key and exit 0 without checking anything, so a revoked
+  or expired credential produced a confident-looking summary and the 401s
+  that followed looked unrelated. It now reports the org and scopes on
+  success, distinguishes rejected (401) from access-disabled (403), and
+  treats unreachable as *unknown* rather than invalid — conflating those is
+  how a flaky connection becomes an afternoon of regenerating good
+  credentials. `--no-verify` keeps the old local-only behaviour.
+
 ## [0.11.2] - 2026-09-02 - Stamp run boundaries on the server's clock
 
 ### Fixed
