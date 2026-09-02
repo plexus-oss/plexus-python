@@ -14,10 +14,28 @@ Adds a small, well-behaved Plexus ingest client to device-side code. Optimized f
 - Targets include: ESP32 / Arduino / RP2040, Raspberry Pi, NVIDIA Jetson, embedded Linux gateways, drone autopilot companion computers, satellite OBC software
 - Languages: C / C++, MicroPython, CPython, Rust, Go (for edge gateways)
 
-**If the target runs CPython (Pi, Jetson, any embedded Linux with room), stop and use the SDK instead** — `pip install plexus-python`, then `Plexus(api_key=..., source_id=...).send("temp", 72.5)`. It already does batching, backoff, and buffering. Hand-rolling is for targets the SDK can't reach.
+**If the target runs CPython (Pi, Jetson, any embedded Linux with room), stop and use the SDK instead** — `pip install plexus-python`, then `Plexus(api_key=..., source_id=...)`. It handles backoff, store-and-forward buffering and the WebSocket transport. Hand-rolling is for targets the SDK can't reach.
+
+**`send()` does NOT batch.** Every call is its own message on the wire, and the ceiling below counts messages. Above a few readings a second, use `px.batch()`:
+
+```python
+with px.batch(interval_ms=50) as b:      # one message per interval
+    while running:
+        b.send("imu.accel_x", imu.x)     # same signature as px.send()
+        b.send("imu.accel_y", imu.y)
+```
+
+Leaving the block flushes what is queued, and readings keep the timestamp they were taken at. Requires plexus-python >= 0.11.0.
 
 For **server-side ingestion** (a backend collecting metrics and forwarding), the generic `plexus` skill is fine.
 For **dashboards / UI**, use `plexus-dashboard`.
+
+**On a test bench, open a run.** Software driving a test should name its window
+rather than leave someone to find it on a chart later: `POST /api/runs` when the
+test starts, `PATCH /api/runs/{id}` with `status` and `ended_at` when it ends
+(app host, same `x-api-key`), or `with px.run(...)` from plexus-python. Declared
+`pass_criteria` are evaluated against every sample in the window on close. See
+the `plexus` skill for the contract.
 
 ## The ingest contract
 
@@ -53,7 +71,26 @@ Every firmware integration must do these. Skip any of them and you'll lose data 
 
 ### 1. Batch
 
-Never POST one point at a time. Buffer until **64 points OR 5 seconds**, whichever first, then flush. Constants worth exposing:
+**The gateway meters messages, not points.** One request carrying 200 points costs
+exactly what one carrying 1 costs, so the shape of your sends — not their volume —
+decides whether you hit a limit:
+
+| Limit | Value |
+| --- | --- |
+| Telemetry messages per WebSocket connection | 500/s sustained, 2000 burst |
+| Hard ceiling per source (WS and HTTP) | 2000 messages/s |
+| Points per message | 10,000 |
+| Body size | 1 MB (WS) / 5 MB (HTTP) |
+
+Eight channels at 100 Hz sent one at a time is 800 messages/s — over the limit,
+and **the overflow is discarded**. Batched every 50 ms it is 20 messages/s.
+
+Over the limit the gateway drops the whole message and answers `RATE_LIMITED`,
+which arrives *after* the send returned. Those points cannot be recovered, so
+this is a batching problem, not a retry one.
+
+Never POST one point at a time. Buffer until **64 points OR 5 seconds**, whichever
+first, then flush. Constants worth exposing:
 
 ```c
 #define PLEXUS_BATCH_SIZE   64
