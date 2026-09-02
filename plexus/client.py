@@ -595,7 +595,51 @@ class Plexus:
             body["metadata"] = metadata
         if pass_criteria:
             body["pass_criteria"] = pass_criteria
-        return self._api("POST", "/api/runs", body)["run"]
+
+        try:
+            return self._api("POST", "/api/runs", body)["run"]
+        except PlexusError as e:
+            # A bench opens its run BEFORE it starts streaming — that is the
+            # natural order, and it is the order the run exists to capture. But
+            # a source is only created by its first point, so on a fresh bench
+            # the run's source does not exist yet and the route answers 404.
+            #
+            # Register the source and retry, but only for this client's own
+            # source_id: that identity is the SDK's to create, and the first
+            # send() would have created it moments later anyway. An explicitly
+            # passed source_id that does not resolve stays a 404 — there it is
+            # far more likely to be a typo than a bench that has not started.
+            own = source_id is _USE_CLIENT_SOURCE or source_id == self.source_id
+            if not (own and "NOT_FOUND" in str(e)):
+                raise
+            self._register_source()
+            return self._api("POST", "/api/runs", body)["run"]
+
+    def _register_source(self) -> None:
+        """Create this client's source if it does not exist yet.
+
+        Idempotent by intent: a slug that already exists comes back as a
+        conflict, which is success for our purposes. Everything else raises —
+        a run bound to a source we could not create would be a run whose
+        criteria can never be evaluated.
+        """
+        try:
+            self._api(
+                "POST",
+                "/api/sources",
+                {
+                    "source_type": "device",
+                    "slug": self.source_id,
+                    "device_type": "script",
+                    "metadata": {"created_by": "plexus-python start_run"},
+                },
+            )
+        except PlexusError as e:
+            # Raced with the gateway's own auto-create, or with another
+            # process. Either way the row now exists, which is what we needed.
+            if "409" in str(e) or "already exists" in str(e).lower():
+                return
+            raise
 
     def end_run(
         self,
