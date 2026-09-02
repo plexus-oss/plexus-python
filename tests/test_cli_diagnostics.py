@@ -5,7 +5,6 @@ shim shadowing a fresh install, `plexus --version` refusing to answer, and
 `whoami` cheerfully printing a credential it had never checked.
 """
 
-import json
 from unittest import mock
 
 import pytest
