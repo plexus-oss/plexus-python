@@ -1,7 +1,7 @@
 """
 WebSocket transport for the Plexus Python SDK.
 
-Wire-compatible with the C SDK (`plexus_ws.c`). Targets the gateway's
+Implements the gateway's device wire protocol. Targets its
 `/ws/device` endpoint and exchanges the same JSON frames:
 
     client → {"type": "device_auth", "api_key": ..., "source_id": ...,
@@ -392,7 +392,7 @@ class WebSocketTransport:
         command = msg.get("command") or ""
         params = msg.get("params") or {}
 
-        # Ack immediately (matches C SDK: plexus_ws.c:275-280)
+        # Ack immediately, per the gateway wire contract
         self._send_frame({
             "type": "command_result",
             "id": cmd_id,
@@ -547,8 +547,7 @@ def _safe_json(raw: Any) -> dict[str, Any]:
 
 
 def _backoff_delay(attempt: int) -> float:
-    """Exponential backoff with ±25% jitter, capped at BACKOFF_MAX_S.
-    Matches plexus_ws.c:44-52."""
+    """Exponential backoff with ±25% jitter, capped at BACKOFF_MAX_S."""
     base = min(BACKOFF_BASE_S * (2 ** attempt), BACKOFF_MAX_S)
     jitter = base * 0.25 * (2 * random.random() - 1)
     return max(0.1, base + jitter)

@@ -29,7 +29,7 @@ curl -sL https://app.plexus.company/setup | bash -s -- \
   --key plx_xxx --name drone-01
 ```
 
-The name must match `^[a-z0-9][a-z0-9_-]{1,62}$`. `setup.sh` refuses to run without `--name` (or without a TTY to prompt for one) — this is deliberate, because the previous `hostname` fallback silently merged telemetry from cloned SD-card images that all booted as `raspberrypi`.
+The name must match `^[a-z0-9][a-z0-9._-]*$` (max 256 chars). `setup.sh` refuses to run without `--name` (or without a TTY to prompt for one) — this is deliberate, because the previous `hostname` fallback silently merged telemetry from cloned SD-card images that all booted as `raspberrypi`.
 
 **Names are not auto-deduplicated.** The gateway echoes back whatever `source_id` you declare, unchanged — pick a unique name per device (that's what `--name` and `source_id=...` are for). Two devices that declare the same name write into the same source.
 
@@ -215,7 +215,7 @@ px.send("temperature", 72.5, timestamp=t)   # your timestamp, used as-is, no cor
 
 ## Transport
 
-By default the SDK connects over a **WebSocket** to `/ws/device` on the gateway — same wire protocol as the C SDK. This gives you:
+By default the SDK connects over a **WebSocket** to `/ws/device` on the gateway — the gateway's device wire protocol. This gives you:
 
 - lower-latency streaming of telemetry,
 - live command delivery from the UI / API to the device.

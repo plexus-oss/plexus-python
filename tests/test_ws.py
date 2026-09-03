@@ -2,7 +2,7 @@
 
 Spins up a tiny `websockets`-based server on localhost that impersonates the
 gateway's /ws/device endpoint and asserts the frames the SDK exchanges match
-the C SDK / gateway contract:
+the gateway contract:
 
     device_auth → authenticated → telemetry → heartbeat → typed_command roundtrip
 """
