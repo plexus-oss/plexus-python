@@ -6,7 +6,7 @@ If you discover a security vulnerability in plexus-python, please report it resp
 
 **Do NOT open a public GitHub issue for security vulnerabilities.**
 
-Instead, email **support@plexus.company** with:
+Instead, email **info@plexus.company** with:
 
 - Description of the vulnerability
 - Steps to reproduce
@@ -23,8 +23,8 @@ Instead, email **support@plexus.company** with:
 
 | Version | Supported |
 | ------- | --------- |
-| 0.5.x   | Yes       |
-| < 0.5   | No        |
+| 0.11.x  | Yes       |
+| < 0.11  | No        |
 
 ## Disclosure Policy
 
