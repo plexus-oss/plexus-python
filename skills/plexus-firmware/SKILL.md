@@ -61,7 +61,7 @@ Four things the gateway will reject you for. Get these right or nothing lands:
 1. **The array is `points`.** `"metrics": [...]` returns `400 {"error":"'points' array is required"}`.
 2. **Every point needs `class`**, either `"metric"` or `"event"`. There is no default.
 3. **`timestamp` is a number, never a string.** An ISO-8601 string returns `points[i].timestamp must be a number`. Epoch **milliseconds**; a positive value below `1e12` is read as **seconds** and scaled for you, so either unit works as long as it's numeric.
-4. **`source_id` must match `^[a-z0-9][a-z0-9_-]{1,62}$`** and is not deduplicated — two devices declaring the same id merge into one source. This is what SD-card clones do when they all boot as `raspberrypi`.
+4. **`source_id` must match `^[a-z0-9][a-z0-9._-]*$` (max 256 chars)** and is not deduplicated — two devices declaring the same id merge into one source. This is what SD-card clones do when they all boot as `raspberrypi`.
 
 `timestamp` is optional. Omit it and the gateway stamps the point with its receive time — which is the right move on a device whose clock has never been NTP-synced. Per-point `tags` (a flat string→string map) are supported and optional.
 

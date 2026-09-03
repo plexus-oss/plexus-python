@@ -1,4 +1,4 @@
-# Contributing to Plexus Agent
+# Contributing to plexus-python
 
 Thanks for your interest in contributing! Here's how to get started.
 
@@ -6,7 +6,7 @@ Thanks for your interest in contributing! Here's how to get started.
 
 ```bash
 git clone https://github.com/plexus-oss/plexus-python.git
-cd agent
+cd plexus-python
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
