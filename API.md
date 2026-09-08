@@ -35,6 +35,7 @@ curl -X POST https://gateway.plexus.company/ingest \
   -H "Content-Type: application/json" \
   -d '{
     "points": [{
+      "class": "metric",
       "metric": "temperature",
       "value": 72.5,
       "timestamp": 1699900000,
@@ -83,6 +84,7 @@ x-api-key: plx_xxxxx
 {
   "points": [
     {
+      "class": "metric",
       "metric": "temperature",
       "value": 72.5,
       "timestamp": 1699900000.123,
@@ -216,9 +218,9 @@ Devices authenticate using an API key. The gateway echoes the declared `source_i
 {
   "type": "telemetry",
   "points": [
-    { "metric": "accel_x", "value": 0.12, "timestamp": 1699900000123 },
-    { "metric": "accel_y", "value": 0.05, "timestamp": 1699900000123 },
-    { "metric": "accel_z", "value": 9.81, "timestamp": 1699900000123 }
+    { "class": "metric", "metric": "accel_x", "value": 0.12, "timestamp": 1699900000123 },
+    { "class": "metric", "metric": "accel_y", "value": 0.05, "timestamp": 1699900000123 },
+    { "class": "metric", "metric": "accel_z", "value": 9.81, "timestamp": 1699900000123 }
   ]
 }
 ```
@@ -251,6 +253,7 @@ requests.post(
     headers={"x-api-key": "plx_xxxxx"},
     json={
         "points": [{
+            "class": "metric",
             "metric": "temperature",
             "value": 72.5,
             "timestamp": time.time(),
@@ -297,6 +300,7 @@ import (
 func main() {
     points := map[string]interface{}{
         "points": []map[string]interface{}{{
+            "class":     "metric",
             "metric":    "temperature",
             "value":     72.5,
             "timestamp": float64(time.Now().Unix()),
