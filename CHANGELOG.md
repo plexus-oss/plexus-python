@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-09-08 - Docs that actually work
+
+No code changes. Every edit here is documentation or dead weight, but the
+first item was breaking people who copied from the docs.
+
+### Fixed
+
+- **Every raw-HTTP example in `API.md` would have returned 400.** The
+  gateway requires `class` on each point (`points[i].class is required`)
+  and not one of the five curl/Python/Go/WebSocket examples included it.
+  The SDK sets `class` for you, which is exactly why this survived so
+  long: the library path worked, and only people copying the HTTP
+  examples hit it.
+
+- **The documented `source_id` pattern rejected valid ids.** README and
+  the firmware skill both said `^[a-z0-9][a-z0-9_-]{1,62}$`, while
+  `client.py` enforces `^[a-z0-9][a-z0-9._-]*$` at 256 characters. Dotted
+  ids like `sat.01` are legal and read as forbidden.
+
+- **`SECURITY.md` declared the shipping version unsupported** — the table
+  stopped at `0.5.x` — and pointed at an address that isn't monitored.
+  It now says `0.11.x` and `info@plexus.company`.
+
+### Removed
+
+- **All references to the C SDK.** `plexus-oss/plexus-c` is deleted, so
+  the README, `ws.py` and `test_ws.py` were describing the wire protocol
+  by pointing at a repository that 404s. Now described as what it is: the
+  gateway's device wire protocol. `CHANGELOG` history is left alone.
+
+- **`scripts/plexus.service`** — a systemd unit running `plexus start`, a
+  subcommand that does not exist. Nothing referenced it, and the `/setup`
+  installer tells you to write your own unit.
+
+- **`scripts/scan_buses.py`** (17-line scratch script, undeclared
+  `smbus2` dependency, no callers) and a 7-byte `TODO.md`.
+
+
 ## [0.11.3] - 2026-09-02 - Let the CLI diagnose the CLI
 
 All three of these came out of one evening of actually using it.
