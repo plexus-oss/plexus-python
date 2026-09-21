@@ -165,7 +165,7 @@ For real-time UI-controlled streaming, devices connect via WebSocket.
 1. Device connects to the gateway
 2. Device authenticates with API key (and advertises any registered commands)
 3. Device streams `telemetry` frames
-4. Dashboard/API invokes registered commands via `typed_command`
+4. Plexus invokes registered commands via `typed_command` (see the note under Commands)
 
 ### Device Authentication
 
@@ -227,7 +227,9 @@ Devices authenticate using an API key. The gateway echoes the declared `source_i
 
 ### Commands
 
-Dashboard/API actions reach the device as a single `typed_command` envelope; the device replies with `command_result` frames. Register handlers with `px.on_command(...)` before the first `send()`.
+Commands reach the device as a single `typed_command` envelope; the device replies with `command_result` frames. Register handlers with `px.on_command(...)` before the first `send()`.
+
+> **Note:** the public API route for sending commands (`POST /v1/sources/{id}/commands`) was turned off on 2026-09-21 and returns `410 Gone`. Nothing in Plexus can currently trigger a custom handler.
 
 ```json
 // Server → Device

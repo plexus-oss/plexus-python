@@ -218,7 +218,7 @@ px.send("temperature", 72.5, timestamp=t)   # your timestamp, used as-is, no cor
 By default the SDK connects over a **WebSocket** to `/ws/device` on the gateway — the gateway's device wire protocol. This gives you:
 
 - lower-latency streaming of telemetry,
-- live command delivery from the UI / API to the device.
+- the channel that will carry actions triggered from a Plexus dashboard.
 
 If the socket is unavailable, sends transparently fall back to `POST /ingest` so no data is lost.
 
@@ -245,6 +245,8 @@ px.send("temperature", 72.5)   # opens the socket, waits for auth
 ```
 
 The SDK sends an `ack` frame before invoking the handler, then a `result` frame with whatever the handler returns (or an `error` frame if it raises).
+
+> **Note:** nothing in Plexus can currently trigger a custom handler. The API route for sending commands was turned off on 2026-09-21. Triggering handlers from a dashboard, with permissions and a record of every run, is being rebuilt.
 
 ## Environment Variables
 

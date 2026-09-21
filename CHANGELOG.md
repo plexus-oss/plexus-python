@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.11.5] - 2026-09-21 - The commands API is off
+
+No code changes. The docs described a way to send commands to a device that
+no longer exists.
+
+### Changed
+
+- **`POST /v1/sources/{id}/commands` is turned off, and the docs now say so.**
+  Plexus turned the endpoint off on 2026-09-21. It returns `410 Gone`.
+  Any API key of any scope could send any command name to any device in
+  the org, which is not safe for commands that reach hardware.
+  - The agent skill no longer offers to send commands, and it tells agents
+    not to call the endpoint.
+  - README and `API.md` say plainly that nothing in Plexus can currently
+    trigger an `on_command` handler.
+  - `on_command` itself is unchanged.
+
 ## [0.11.4] - 2026-09-08 - Docs that actually work
 
 No code changes. Every edit here is documentation or dead weight, but the

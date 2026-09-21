@@ -1,6 +1,6 @@
 ---
 name: plexus
-description: Integrate with the Plexus telemetry API — send data, query metrics, subscribe to live streams, send commands to devices. Use when the user mentions Plexus, plexus.company, gateway.plexus.company, plexus-data-api.fly.dev, or plx_ API keys. ALSO USE when the request involves IoT/hardware telemetry, fleet observability, sending sensor data to a backend, querying device time-series, building a fleet dashboard, monitoring drones/satellites/robots/edge devices, or any phrase like "send my sensor readings somewhere", "store telemetry", "track a fleet", "ingest metrics", or "device observability" — even if "Plexus" is never said.
+description: Integrate with the Plexus telemetry API — send data, query metrics, subscribe to live streams. Use when the user mentions Plexus, plexus.company, gateway.plexus.company, plexus-data-api.fly.dev, or plx_ API keys. ALSO USE when the request involves IoT/hardware telemetry, fleet observability, sending sensor data to a backend, querying device time-series, building a fleet dashboard, monitoring drones/satellites/robots/edge devices, or any phrase like "send my sensor readings somewhere", "store telemetry", "track a fleet", "ingest metrics", or "device observability" — even if "Plexus" is never said.
 tools: Read, Write, Edit, Bash, WebFetch
 ---
 
@@ -13,7 +13,7 @@ Plexus is a telemetry/observability platform for hardware fleets (drones, satell
 Trigger on any of:
 
 - The user mentions "Plexus", "plexus.company", `plx_` keys, `gateway.plexus.company`, or `plexus-data-api.fly.dev`
-- The user wants to ingest telemetry, query device metrics, stream live points, or send commands to a device
+- The user wants to ingest telemetry, query device metrics, or stream live points
 - The user is building a dashboard, alert pipeline, or analysis on top of fleet telemetry
 - The user pastes a Plexus curl example and asks for help
 
@@ -27,7 +27,7 @@ Two base URLs. Authenticate with an `x-api-key` header on HTTP.
 | Purpose                                            | Host                             |
 | -------------------------------------------------- | -------------------------------- |
 | Ingest                                              | `https://gateway.plexus.company` |
-| Read API (sources, metrics, logs, fleet, commands, live stream) | `https://plexus-data-api.fly.dev` |
+| Read API (sources, metrics, logs, fleet, live stream) | `https://plexus-data-api.fly.dev` |
 
 ```
 x-api-key: plx_...
@@ -141,9 +141,9 @@ You do **not** need to answer application-level pings on this endpoint; keepaliv
 
 The gateway's own sockets (`/ws/device`, `/ws/browser`) are for the Python SDK and the Plexus app respectively. Don't write third-party clients against them. There is no `/v1/stream` on the gateway.
 
-### Control (data API)
+### Control
 
-`POST /v1/sources/{id}/commands` — body `{ command, params? }`, response `{ queued: bool }`. Confirm with the user before sending — these hit physical hardware.
+There is no API for sending commands to devices. `POST /v1/sources/{id}/commands` was turned off and returns `410 Gone`. Don't write code that calls it, and don't offer to trigger device behavior through the API.
 
 ## Standard scaffolding
 
@@ -216,7 +216,6 @@ let the pipeline settle first.
 - **Telemetry frames are batched** — `points` is an array. Handling one frame as one point silently drops data.
 - `start`/`end` are **ISO date-times on every endpoint** that takes them — `query`, `logs` and `fleet/metrics` alike. `last=1h` is easier and works on all three.
 - `auto_downsampled: true` in a query response means the bucket size was picked for you — surface it in the UI so users understand what they're looking at.
-- Commands queue on the device; they don't execute synchronously. Don't promise the user "it rebooted" — promise "reboot queued".
 
 ## When unsure
 
