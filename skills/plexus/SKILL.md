@@ -83,7 +83,7 @@ Paths are `/v1/sources/...`. `/v1/devices/...` is a deprecated alias — bare `/
 - `GET /v1/sources/{id}/metrics` → `string[]` (metric names)
 - `GET /v1/sources/{id}/metrics/latest` → `{ metrics: { [name]: number } }`
 - `GET /v1/sources/{id}/metrics/query?metrics=a,b&last=1h` → columnar, see below. Also takes `start`, `end`, `interval`.
-- `GET /v1/sources/{id}/logs?last=1h&limit=1000` → event rows, i.e. `class: "event"` points (also `tail`, `name`, `start`, `end`). Plexus has no separate log type; this is the event history.
+- `GET /v1/sources/{id}/events?last=1h&limit=1000` → `[{ timestamp_ms, metric, value, tags }]`, the `class: "event"` points (also `tail`, `name`, `start`, `end`). Plexus has no separate log type. `/logs` is an old alias for the same route; use `/events`.
 - `GET /v1/fleet/health` → `{ sources_total, sources_online }`
 - `GET /v1/fleet/metrics?metric=X&last=1h` → `{ metric, interval, sources_online, sources_w_metric, sources: [...], truncated }`
 
@@ -125,7 +125,7 @@ const points = s.timestamp_ms.map((t, i) => ({ t, v: s.avg[i] }));
 WS wss://api.plexus.company/v1/sources/{source_id}/metrics/stream?metrics=a,b
 ```
 
-Also `/logs/stream` (event points) and `/video/stream` under the same source prefix.
+Also `/events/stream` (event points) and `/video/stream` under the same source prefix.
 
 **Auth is the first message, not a header.** Immediately after connect, send:
 
@@ -219,7 +219,7 @@ let the pipeline settle first.
 - **The query response is columnar.** `series[m].avg[i]`, not `series[m][i].v`. Reaching for `.t`/`.v` yields `undefined` and an empty chart with no error.
 - **The live stream is on the data API, and auths by first message.** There is no `/v1/stream` on the gateway.
 - **Telemetry frames are batched** — `points` is an array. Handling one frame as one point silently drops data.
-- `start`/`end` are **ISO date-times on every endpoint** that takes them — `query`, `logs` and `fleet/metrics` alike. `last=1h` is easier and works on all three.
+- `start`/`end` are **ISO date-times on every endpoint** that takes them — `query`, `events` and `fleet/metrics` alike. `last=1h` is easier and works on all three.
 - `auto_downsampled: true` in a query response means the bucket size was picked for you — surface it in the UI so users understand what they're looking at.
 
 ## When unsure

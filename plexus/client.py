@@ -543,9 +543,9 @@ class Plexus:
 
         Use this whenever readings arrive faster than a few times a second.
         `send()` puts every reading in its own WebSocket frame, and the gateway
-        limits *frames*, not points — so eight channels at 100 Hz is 800
-        frames/s against a 500/s ceiling, and the overflow is discarded.
-        Batched, the same 800 readings/s is 10 frames/s.
+        limits *frames*, not points — so 25 channels at 100 Hz is 2,500
+        frames/s against a 2,000/s ceiling, and the overflow is discarded.
+        Batched, the same 2,500 readings/s is 10 frames/s.
 
             with px.batch(interval_ms=50) as b:
                 while running:

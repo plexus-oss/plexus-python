@@ -37,7 +37,7 @@ Dashboard
 └─ Detail pane
    ├─ Tile row: every metric from /metrics/latest as a big-number card
    ├─ Chart grid: one line chart per metric over the last 1h via /metrics/query
-   └─ (Optional) Event pane: /logs (event points: faults, state changes, log lines) in a virtualized list
+   └─ (Optional) Event pane: /events (event points: faults, state changes, log lines) in a virtualized list
 ```
 
 ## Polling cadences
