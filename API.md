@@ -464,14 +464,14 @@ message, whatever it carries. `send()` does not batch:
 
 | Limit                              | Value            |
 | ---------------------------------- | ---------------- |
-| Telemetry messages per WS connection | 500/s sustained, 2000 burst |
-| Hard ceiling per source (WS + HTTP) | 2000 messages/s  |
+| Telemetry messages per WS connection | 2,000/s          |
+| Hard ceiling per source (WS + HTTP) | 2,000 messages/s, bursts up to 500 |
 | Points per message                 | 10,000           |
 | Message size                       | 1 MB             |
 
 Because the ceiling counts messages, the shape of your sends decides whether
-you hit it. Eight channels at 100 Hz sent one at a time is 800 messages/s —
-over the limit. The same 800 readings/s batched every 100 ms is 10 messages/s,
+you hit it. 25 channels at 100 Hz sent one at a time is 2,500 messages/s —
+over the limit. The same 2,500 readings/s batched every 100 ms is 10 messages/s,
 and the batches are also several times cheaper to store.
 
 **Over the limit, the gateway discards the whole message.** It replies with a

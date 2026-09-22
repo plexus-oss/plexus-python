@@ -80,7 +80,7 @@ px.send_batch([
 
 ### `batch()` — coalesce a fast stream of readings
 
-Use this above a few readings per second. Every `send()` is one WebSocket message, and the gateway limits **messages**, not points — 500/s on a connection. Eight channels at 100 Hz sent one at a time is 800 messages/s, and the overflow is discarded before it is stored.
+Use this above a few readings per second. Every `send()` is one WebSocket message, and the gateway limits **messages**, not points — 2,000/s on a connection. 25 channels at 100 Hz sent one at a time is 2,500 messages/s, and the overflow is discarded before it is stored.
 
 ```python
 with px.batch(interval_ms=50) as b:

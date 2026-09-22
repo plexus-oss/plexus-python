@@ -79,12 +79,12 @@ decides whether you hit a limit:
 
 | Limit | Value |
 | --- | --- |
-| Telemetry messages per WebSocket connection | 500/s sustained, 2000 burst |
-| Hard ceiling per source (WS and HTTP) | 2000 messages/s |
+| Telemetry messages per WebSocket connection | 2,000/s |
+| Hard ceiling per source (WS and HTTP) | 2,000 messages/s, bursts up to 500 |
 | Points per message | 10,000 |
 | Body size | 1 MB (WS) / 5 MB (HTTP) |
 
-Eight channels at 100 Hz sent one at a time is 800 messages/s — over the limit,
+25 channels at 100 Hz sent one at a time is 2,500 messages/s — over the limit,
 and **the overflow is discarded**. Batched every 50 ms it is 20 messages/s.
 
 Over the limit the gateway drops the whole message and answers `RATE_LIMITED`,

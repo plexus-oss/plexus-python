@@ -2,11 +2,10 @@
 
 `px.send()` transmits immediately: every call is its own WebSocket frame. That
 is the right shape for a script sampling a sensor once a second, and the wrong
-one for a test bench. The gateway allows 500 telemetry messages per second on a
-connection and hard-drops a source above 2000/s, and both ceilings count
-*messages*, not points — so eight channels at 100 Hz is 800 frames/s and lands
-over the limit, while the same 800 readings coalesced into ten frames is not
-close to it. The dropped frames come back as `RATE_LIMITED`, after `send()` has
+one for a test bench. The gateway allows 2,000 telemetry messages per second on
+a connection and per source, and the ceiling counts *messages*, not points — so
+25 channels at 100 Hz is 2,500 frames/s and lands over the limit, while the same
+2,500 readings coalesced into ten frames is not close to it. The dropped frames come back as `RATE_LIMITED`, after `send()` has
 already returned True, which is why this is a batching problem rather than a
 retry one: by the time anyone can react, the points are gone.
 
