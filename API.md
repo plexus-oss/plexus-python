@@ -9,7 +9,13 @@ Send telemetry data to Plexus using HTTP or WebSocket.
 | Method    | Use Case                                        |
 | --------- | ----------------------------------------------- |
 | HTTP POST | Simple scripts, batch uploads, embedded devices |
-| WebSocket | Real-time streaming, UI-controlled devices      |
+| WebSocket | Real-time streaming and video (paid plans)      |
+
+The Python SDK picks for you: it tries the WebSocket and falls back to HTTP on
+its own. On the Free plan the gateway refuses the device WebSocket
+(`streaming_requires_plan`), so the SDK sends everything over HTTP and
+telemetry and events still land. Live streaming and video need a paid plan.
+Free also allows up to 3 devices and 7 days of history.
 
 ## Quick Start
 
@@ -18,12 +24,12 @@ Send telemetry data to Plexus using HTTP or WebSocket.
 Set up your device with one command using an API key:
 
 ```bash
-# With API key (fleet provisioning — get from Settings → Developer)
+# With an API key (get one at app.plexus.company/api)
 curl -sL https://app.plexus.company/setup | bash -s -- --key plx_your_api_key
 
 ```
 
-Then control streaming, recording, and configuration from [app.plexus.company/devices](https://app.plexus.company/devices).
+Then find the device at [app.plexus.company/devices](https://app.plexus.company/devices).
 
 ### Option 2: Direct HTTP
 
@@ -63,8 +69,15 @@ Plexus uses API keys for all authentication:
 **Option B: Manual creation**
 
 1. Sign up at [app.plexus.company](https://app.plexus.company)
-2. Go to Settings → Developer
+2. Go to [app.plexus.company/api](https://app.plexus.company/api)
 3. Create an API key (starts with `plx_`)
+
+**Limit to device slug** (optional, on the same form) binds the key to one
+`source_id`. The gateway then refuses it for any other source: `403` on
+`/ingest`, and a `source_not_allowed` error on the WebSocket. Use a bound key
+on every device you put in a customer's hands, so a key pulled off one unit
+cannot write as the rest of your fleet. Leave it empty for a fleet key that can
+write as any source in your org.
 
 ## HTTP API
 
@@ -97,6 +110,7 @@ x-api-key: plx_xxxxx
 
 | Field        | Type   | Required | Description                                                                                                                                                                                             |
 | ------------ | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `class`      | string | WS only  | `"metric"` (numeric value) or `"event"` (anything else). Set it explicitly. Over HTTP a missing `class` is inferred from the value; over WebSocket it is required.                                        |
 | `metric`     | string | Yes      | Metric name (e.g., `temperature`, `motor.rpm`)                                                                                                                                                          |
 | `value`      | any    | Yes      | See supported value types below                                                                                                                                                                         |
 | `timestamp`  | float  | No       | Unix timestamp in seconds (or ms if ≥ 1e12). Omit to use device time. Over WebSocket, the Python SDK applies a server-synced clock correction when omitted — see [Clock correction](#clock-correction). |
@@ -112,6 +126,27 @@ x-api-key: plx_xxxxx
 | boolean | `true`, `false`                  | On/off, enabled/disabled         |
 | object  | `{"x": 1.2, "y": 3.4, "z": 5.6}` | Vector data, structured readings |
 | array   | `[1.0, 2.0, 3.0, 4.0]`           | Waveforms, multiple values       |
+
+### Events and logs
+
+Things that happen, rather than things you measure, are `class: "event"`
+points: faults, state changes, operator actions, log lines. The Python SDK
+sends them with `px.event(name, data)`.
+
+Limits per event point: a string value up to 256 bytes, an object or array
+value up to 4,096 bytes of JSON, and up to 16 tags. The gateway rejects larger
+points with a 400.
+
+There is no log-file upload and no `logging.Handler`. Forward the log lines
+that matter as events:
+
+```python
+px.event("log", {"level": "error", "msg": "IMU read timed out"})
+```
+
+Send errors, warnings and state changes, not every debug line: each call is
+one message, and the gateway limits messages (see
+[Rate limits and batching](#rate-limits-and-batching)).
 
 ### Runs
 
@@ -158,7 +193,14 @@ To group data without a window, plain `tags` on each point still work.
 
 ## WebSocket API
 
-For real-time UI-controlled streaming, devices connect via WebSocket.
+For real-time streaming and video, devices connect via WebSocket. This needs a
+paid plan: on Free, the gateway answers `device_auth` with an error frame
+(`"code": "streaming_requires_plan"`) and closes. Send over HTTP instead; the
+Python SDK does this for you.
+
+Video frames go over this socket. They are relayed live to anyone watching and
+stored only when someone presses **Record** in the app, for up to 4 hours per
+recording.
 
 ### Connection Flow
 
@@ -277,6 +319,7 @@ await fetch("https://gateway.plexus.company/ingest", {
   body: JSON.stringify({
     points: [
       {
+        class: "metric",
         metric: "temperature",
         value: 72.5,
         timestamp: Date.now() / 1000,
@@ -335,6 +378,7 @@ void sendToPlexus(const char* metric, float value) {
     http.addHeader("x-api-key", "plx_xxxxx");
 
     String payload = "{\"points\":[{";
+    payload += "\"class\":\"metric\",";
     payload += "\"metric\":\"" + String(metric) + "\",";
     payload += "\"value\":" + String(value) + ",";
     payload += "\"timestamp\":" + String(time(nullptr)) + ",";
@@ -358,6 +402,7 @@ curl -X POST https://gateway.plexus.company/ingest \
   -H "Content-Type: application/json" \
   -d "{
     \"points\": [{
+      \"class\": \"metric\",
       \"metric\": \"temperature\",
       \"value\": 72.5,
       \"timestamp\": $(date +%s),
@@ -408,14 +453,14 @@ while True:
 | 200    | Success                         |
 | 400    | Bad request (check JSON format) |
 | 401    | Invalid or missing API key      |
-| 403    | API key lacks permissions       |
+| 403    | API key lacks permissions, or is limited to another device |
 | 404    | Resource not found              |
 | 410    | Resource expired                |
 
 ## Rate limits and batching
 
 The gateway meters **messages**, not points. One `px.send()` call is one
-message, whatever it carries:
+message, whatever it carries. `send()` does not batch:
 
 | Limit                              | Value            |
 | ---------------------------------- | ---------------- |
@@ -495,4 +540,4 @@ px.send("temperature", 72.5, timestamp=t)        # your timestamp → used as-is
 - **Omit timestamp when unsure** - The Python SDK applies server-synced clock correction when `timestamp` is omitted over WebSocket; only pass an explicit timestamp when you have a reliable wall-clock source
 - **Consistent source_id** - Use the same ID for each physical device/source
 - **Use tags** - Label data for filtering and grouping (e.g., `{"location": "lab"}`)
-- **Prefer WebSocket** - For real-time UI-controlled devices, the SDK connects over WebSocket by default
+- **Let the SDK pick the transport** - It uses the WebSocket when your plan allows it and falls back to HTTP otherwise

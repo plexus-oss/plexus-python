@@ -2,6 +2,67 @@
 
 ## [Unreleased]
 
+Docs and agent skills caught up with the platform. The only code change is
+one error message. The skills ship inside the wheel, so these reach users on
+the next release.
+
+### Fixed
+
+- **The 0.11.4 entry below overstated the `class` bug.** It said raw-HTTP
+  examples without `class` return 400. They don't: `POST /ingest` infers a
+  missing `class` (numbers become metrics, everything else events). The
+  WebSocket is the path that requires it, and `"class": "metric"` on a
+  non-number is still a 400. The skills and `API.md` now say that, and still
+  tell raw-HTTP senders to set `class` explicitly. The JavaScript, Arduino
+  and Bash examples in `API.md` now set it too.
+
+- **Where to get an API key.** The README said "Devices → Add Device" and
+  `API.md` said "Settings → Developer". Keys are made at
+  `app.plexus.company/api`, and the "no API key" error now says so instead
+  of pointing at `/devices`.
+
+- **The README said `setup.sh` refuses to run without `--name`.** It
+  doesn't. Without a name the SDK makes up a random `source-xxxxxxxx` id.
+  The README now says to pass `--name` and what happens if you don't.
+
+- **The README said to "enable" the SQLite buffer.** It is on by default.
+  The example now shows how to turn it off.
+
+- **The firmware skill said `px.send()` is "batched for you".** It is one
+  message per call. Only `px.batch()` batches.
+
+- **The bug-report template asked which of `sensors`, `can`, `mavlink` and
+  `camera` you had installed.** None of those extras exist. The only one is
+  `video`.
+
+### Changed
+
+- **The read API host in the skills is `https://api.plexus.company`**, not
+  the raw Fly hostname. `scripts/verify_skills.py` checks it by default, and
+  a test keeps the old hostname out of the skills.
+
+- **Documented "Limit to device slug".** A key made with it can only send as
+  that one `source_id`. The docs recommend one for every device in a
+  customer's hands.
+
+- **Documented the Free plan's limits.** The gateway refuses the device
+  WebSocket on Free (`streaming_requires_plan`); the SDK falls back to HTTP,
+  so telemetry and events still land. Live streaming and video need a paid
+  plan. Free allows 3 devices and 7 days of history.
+
+- **Documented how video is kept.** Frames are relayed live, and stored only
+  when someone presses Record in the app, up to 4 hours per recording.
+
+- **Documented logs.** There is no log upload and no `logging.Handler`.
+  Forward the lines that matter with `px.event("log", {...})`. Event limits
+  are now written down: 256 bytes for a string value, 4,096 bytes of JSON
+  for an object or array, 16 tags.
+
+- **`scripts/setup.sh` re-synced with the script `/setup` serves.** The old
+  copy still installed `[sensors]` and `[picamera]` extras that were removed
+  in 0.2.0. It also links `github.com/plexus-oss/plexus-python` and
+  `app.plexus.company/api` now.
+
 ## [0.11.5] - 2026-09-21 - The commands API is off
 
 No code changes. The docs described a way to send commands to a device that

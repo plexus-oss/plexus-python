@@ -18,7 +18,9 @@ px = Plexus(api_key="plx_xxx", source_id="device-001")
 px.send("temperature", 72.5)
 ```
 
-Get an API key at [app.plexus.company](https://app.plexus.company) → Devices → Add Device.
+Get an API key at [app.plexus.company/api](https://app.plexus.company/api), or run `plexus init` to authorize the machine in a browser.
+
+When you create a key there, you can fill in **Limit to device slug**. That key can then only send as that one `source_id`; the gateway refuses it for any other. Use one of these for every device you put in a customer's hands, so a key pulled off one unit cannot write as the rest of your fleet.
 
 ## Device identity
 
@@ -29,7 +31,7 @@ curl -sL https://app.plexus.company/setup | bash -s -- \
   --key plx_xxx --name drone-01
 ```
 
-The name must match `^[a-z0-9][a-z0-9._-]*$` (max 256 chars). `setup.sh` refuses to run without `--name` (or without a TTY to prompt for one) — this is deliberate, because the previous `hostname` fallback silently merged telemetry from cloned SD-card images that all booted as `raspberrypi`.
+The name is turned into the device's `source_id`, which must match `^[a-z0-9][a-z0-9._-]*$` (max 256 chars). Pass `--name` every time. Without it, and without `source_id=...` in code, the SDK makes up a random id like `source-1a2b3c4d` on first run and saves it to `~/.plexus/config.json`. Don't use the hostname: cloned SD-card images all boot as `raspberrypi`, and their telemetry merges into one source.
 
 **Names are not auto-deduplicated.** The gateway echoes back whatever `source_id` you declare, unchanged — pick a unique name per device (that's what `--name` and `source_id=...` are for). Two devices that declare the same name write into the same source.
 
@@ -117,9 +119,23 @@ px.event("sensor_error", {"sensor": "imu", "code": 42}, tags={"motor": "A"})
 
 The platform displays events as markers overlaid on your telemetry charts, not as time-series lines.
 
+Limits per event: a string value up to 256 bytes, a dict or list value up to 4,096 bytes of JSON, and up to 16 tags. The gateway rejects anything larger.
+
+### Logs
+
+There is no log-file upload and no `logging.Handler` in this package. To get important log lines into Plexus, send them as events:
+
+```python
+px.event("log", {"level": "error", "msg": "IMU read timed out"})
+```
+
+Forward the lines you would want on the timeline next to your telemetry (errors, warnings, state changes), not every debug line. Each call is one message, and the gateway limits messages (see [`batch()`](#batch--coalesce-a-fast-stream-of-readings)).
+
 ## Video streaming
 
 Two methods depending on whether you control the capture loop or just have a URL.
+
+Video needs a paid plan: frames go over the WebSocket, which the gateway refuses on the Free plan. Frames are relayed live to anyone watching. They are stored only when someone presses **Record** in the app, for up to 4 hours per recording.
 
 ### `send_video_frame(frame, camera_id)` — send frames you capture yourself
 
@@ -182,10 +198,10 @@ See [`examples/`](examples/) for runnable versions of each.
 
 ## Reliability
 
-Every send buffers locally before hitting the network, retries with exponential backoff, and keeps your data safe across outages. Enable SQLite persistence to survive restarts and power loss:
+Every send buffers locally before hitting the network, retries with exponential backoff, and keeps your data safe across outages. The buffer is on disk (SQLite) by default, so it survives restarts and power loss. To keep it in memory only:
 
 ```python
-px = Plexus(persistent_buffer=True)
+px = Plexus(persistent_buffer=False)
 ```
 
 Point counts and flush:
@@ -228,6 +244,10 @@ px = Plexus()
 ```
 
 There is no transport selector: the SDK always prefers the WebSocket and falls back to `POST /ingest` on its own when the socket is unavailable.
+
+Either way, plain `px.send()` is one message per call; it does not batch. `px.send_batch()` sends one list as one message, and `px.batch()` groups a fast stream for you in the background.
+
+**On the Free plan** the gateway refuses the device WebSocket (`streaming_requires_plan`). The SDK falls back to HTTP by itself, so `send()`, `send_batch()`, `batch()` and `event()` all still work. Live streaming and video need a paid plan. Free also caps you at 3 devices and 7 days of history.
 
 ### Handling commands
 
@@ -273,7 +293,7 @@ credentials. See [skills/README.md](skills/README.md).
 ## Architecture
 
 ```
-Your code ── px.send() ── HTTP POST /ingest ──> plexus-gateway ──> ClickHouse + Dashboard
+Your code ── px.send() ── WebSocket /ws/device (or HTTP POST /ingest) ──> plexus-gateway ──> ClickHouse + Dashboard
 ```
 
 One thin path. No agent, no daemon, no adapters. If you want the full HardwareOps platform — dashboards, alerts, RCA, fleet views — that's the web UI at app.plexus.company. This package gets your data there.

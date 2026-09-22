@@ -1,6 +1,6 @@
 ---
 name: plexus-dashboard
-description: Scaffold a working web dashboard against the Plexus telemetry API — device picker, latest-value tiles, time-series charts, log viewer. Use when the user wants to build a frontend, dashboard, ops UI, mission control, or fleet view on top of Plexus data. Triggering phrases include "show me my drones/satellites/robots", "build a dashboard for my fleet", "vibe code a Plexus frontend", "fleet monitoring UI", "telemetry dashboard", "device status page", "live charts of sensor data", or "ops view for my hardware" — even if "Plexus" is never said, as long as the data source is the Plexus API.
+description: Scaffold a working web dashboard against the Plexus telemetry API — device picker, latest-value tiles, time-series charts, event viewer. Use when the user wants to build a frontend, dashboard, ops UI, mission control, or fleet view on top of Plexus data. Triggering phrases include "show me my drones/satellites/robots", "build a dashboard for my fleet", "vibe code a Plexus frontend", "fleet monitoring UI", "telemetry dashboard", "device status page", "live charts of sensor data", or "ops view for my hardware" — even if "Plexus" is never said, as long as the data source is the Plexus API.
 tools: Read, Write, Edit, Bash, WebFetch
 ---
 
@@ -37,7 +37,7 @@ Dashboard
 └─ Detail pane
    ├─ Tile row: every metric from /metrics/latest as a big-number card
    ├─ Chart grid: one line chart per metric over the last 1h via /metrics/query
-   └─ (Optional) Log pane: /logs in a virtualized list
+   └─ (Optional) Event pane: /logs (event points: faults, state changes, log lines) in a virtualized list
 ```
 
 ## Polling cadences
@@ -71,7 +71,7 @@ Ask exactly two questions, no more:
 Create `src/lib/plexus.ts`:
 
 ```ts
-const BASE = "https://plexus-data-api.fly.dev";
+const BASE = "https://api.plexus.company";
 const KEY = process.env.NEXT_PUBLIC_PLEXUS_API_KEY!;
 
 export class PlexusError extends Error {
@@ -158,7 +158,7 @@ export function subscribeMetrics(
 ) {
   const qs = metrics.length ? `?metrics=${metrics.join(",")}` : "";
   const ws = new WebSocket(
-    `wss://plexus-data-api.fly.dev/v1/sources/${sourceId}/metrics/stream${qs}`,
+    `wss://api.plexus.company/v1/sources/${sourceId}/metrics/stream${qs}`,
   );
 
   // Auth is the FIRST MESSAGE, not a header. Send it within 10s or the
@@ -199,6 +199,6 @@ Wire it alongside SWR: keep `useSWR` for initial load (UI hydrates with a value 
 
 ## When unsure about endpoint shapes
 
-`https://plexus-data-api.fly.dev/openapi.json` is the source of truth for HTTP. It does **not** list WebSocket routes — the generic `plexus` skill documents those.
+`https://api.plexus.company/openapi.json` is the source of truth for HTTP. It does **not** list WebSocket routes — the generic `plexus` skill documents those.
 
-Corrected 2026-08-28: `/v1/devices` → `/v1/sources`, removed the non-existent per-source health endpoint, fixed the columnar query type, and replaced the live-stream section (the old `wss://gateway.plexus.company/v1/stream` 404s, and the "browsers can't authenticate" caveat no longer holds).
+Corrected 2026-08-28: `/v1/devices` → `/v1/sources`, removed the non-existent per-source health endpoint, fixed the columnar query type, and replaced the live-stream section (the old `wss://gateway.plexus.company/v1/stream` 404s, and the "browsers can't authenticate" caveat no longer holds). Corrected 2026-09-22: the read API host is `api.plexus.company`.

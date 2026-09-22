@@ -46,7 +46,7 @@ from pathlib import Path
 
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 
-DEFAULT_API_BASE = "https://plexus-data-api.fly.dev"
+DEFAULT_API_BASE = "https://api.plexus.company"
 DEFAULT_GATEWAY_BASE = "https://gateway.plexus.company"
 
 # WebSocket routes. FastAPI omits these from the OpenAPI spec, so they are

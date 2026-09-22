@@ -36,8 +36,9 @@ Then just ask for what you want — "send my ESP32's battery voltage to Plexus",
 An agent that has not read these invents a plausible Plexus API and gets it
 wrong in ways that fail quietly. The three that cost the most real time:
 
-- The ingest array is **`points`**, not `metrics`, and every point needs a
-  `class`. Getting this wrong is a 400 on every write.
+- The ingest array is **`points`**, not `metrics`. Getting this wrong is a
+  400 on every write. Every point should also carry a `class`: HTTP infers
+  it when missing, the WebSocket does not.
 - `timestamp` must be a **number**. An ISO-8601 string is rejected outright.
 - The query response is **columnar** — `series[m].avg[i]`, not
   `series[m][i].v`. Guessing wrong yields `undefined` with no error: an empty

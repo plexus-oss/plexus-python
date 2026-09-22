@@ -65,13 +65,23 @@ def test_ingest_array_is_points(skill: Path):
 
 @pytest.mark.parametrize("skill", SKILLS, ids=lambda p: p.parent.name)
 def test_ingest_points_declare_class(skill: Path):
-    """`class` is required on every point; there is no default."""
+    """Every sample sets `class`. HTTP /ingest infers it when missing, but the
+    WebSocket rejects a point without it, so the skills always show it."""
     for body in ingest_bodies(skill.read_text()):
         if '"metric"' in body and '"value"' in body:
             assert '"class"' in body or "class" in body, (
                 "an ingest sample builds points without `class` — the "
-                "validator requires 'metric' or 'event' on every point"
+                "WebSocket validator requires 'metric' or 'event' on every point"
             )
+
+
+@pytest.mark.parametrize("skill", SKILLS, ids=lambda p: p.parent.name)
+def test_read_api_host_is_canonical(skill: Path):
+    """The read API is api.plexus.company. The raw Fly hostname still answers
+    today, but it is an implementation detail and should not be copied."""
+    assert "plexus-data-api.fly.dev" not in skill.read_text(), (
+        "uses the raw Fly hostname — use https://api.plexus.company"
+    )
 
 
 @pytest.mark.parametrize("skill", SKILLS, ids=lambda p: p.parent.name)

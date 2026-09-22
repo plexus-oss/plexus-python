@@ -14,7 +14,7 @@ Adds a small, well-behaved Plexus ingest client to device-side code. Optimized f
 - Targets include: ESP32 / Arduino / RP2040, Raspberry Pi, NVIDIA Jetson, embedded Linux gateways, drone autopilot companion computers, satellite OBC software
 - Languages: C / C++, MicroPython, CPython, Rust, Go (for edge gateways)
 
-**If the target runs CPython (Pi, Jetson, any embedded Linux with room), stop and use the SDK instead** — `pip install plexus-python`, then `Plexus(api_key=..., source_id=...)`. It handles backoff, store-and-forward buffering and the WebSocket transport. Hand-rolling is for targets the SDK can't reach.
+**If the target runs CPython (Pi, Jetson, any embedded Linux with room), stop and use the SDK instead** — `pip install plexus-python`, then `Plexus(api_key=..., source_id=...)`. It handles backoff, store-and-forward buffering and the WebSocket transport, and falls back to HTTP on its own (including on the Free plan, where the gateway refuses the device WebSocket). Hand-rolling is for targets the SDK can't reach.
 
 **`send()` does NOT batch.** Every call is its own message on the wire, and the ceiling below counts messages. Above a few readings a second, use `px.batch()`:
 
@@ -56,12 +56,14 @@ Response:
   { "success": true, "count": 2, "source_id": "drone-001" }
 ```
 
-Four things the gateway will reject you for. Get these right or nothing lands:
+Three things the gateway will reject you for, and one to always set. Get these right or nothing lands:
 
 1. **The array is `points`.** `"metrics": [...]` returns `400 {"error":"'points' array is required"}`.
-2. **Every point needs `class`**, either `"metric"` or `"event"`. There is no default.
-3. **`timestamp` is a number, never a string.** An ISO-8601 string returns `points[i].timestamp must be a number`. Epoch **milliseconds**; a positive value below `1e12` is read as **seconds** and scaled for you, so either unit works as long as it's numeric.
-4. **`source_id` must match `^[a-z0-9][a-z0-9._-]*$` (max 256 chars)** and is not deduplicated — two devices declaring the same id merge into one source. This is what SD-card clones do when they all boot as `raspberrypi`.
+2. **`timestamp` is a number, never a string.** An ISO-8601 string returns `points[i].timestamp must be a number`. Epoch **milliseconds**; a positive value below `1e12` is read as **seconds** and scaled for you, so either unit works as long as it's numeric.
+3. **`source_id` must match `^[a-z0-9][a-z0-9._-]*$` (max 256 chars)** and is not deduplicated — two devices declaring the same id merge into one source. This is what SD-card clones do when they all boot as `raspberrypi`.
+4. **Set `class` on every point**: `"metric"` for numbers, `"event"` for strings, bools, objects and arrays. HTTP `/ingest` infers it when missing (numbers → metric, anything else → event), but the WebSocket rejects a point without it, and `"class": "metric"` on a non-number is a 400. Set it explicitly.
+
+Events are for faults, state changes and log lines. There is no log upload: send the lines that matter as `{"class":"event","metric":"log","value":{"level":"error","msg":"..."}}`. Limits: a string value up to 256 bytes, an object/array value up to 4,096 bytes of JSON, up to 16 tags.
 
 `timestamp` is optional. Omit it and the gateway stamps the point with its receive time — which is the right move on a device whose clock has never been NTP-synced. Per-point `tags` (a flat string→string map) are supported and optional.
 
@@ -118,6 +120,7 @@ The `source_id` must be stable across reboots **and unique across the fleet**. U
 - ESP32 / Arduino: NVS / preferences storage, **not** hardcoded in firmware
 - Raspberry Pi / Linux: `/etc/plexus/key` with mode 0600, or env var
 - Never compile keys into a binary that ships to multiple devices — one leak compromises the fleet
+- For devices in customer hands, give each one its own key made at `https://app.plexus.company/api` with **Limit to device slug** set to its `source_id`. The gateway refuses that key for any other source (`403`), so a key pulled off one unit cannot write as the rest of the fleet
 
 ### 5. Bound memory
 
@@ -142,7 +145,7 @@ _lock = _thread.allocate_lock()
 def emit(metric, value):
     """Called from sensor-read context. Cheap — just appends to a buffer."""
     with _lock:
-        # class is REQUIRED. timestamp must be a NUMBER (epoch ms) — omit it
+        # Always set class. timestamp must be a NUMBER (epoch ms) — omit it
         # entirely if this board has never NTP-synced and the gateway will
         # stamp it on receive.
         _buf.append({
@@ -203,9 +206,11 @@ Use the SDK — `pip install plexus-python` — unless there's a reason not to:
 from plexus import Plexus
 
 px = Plexus(api_key=os.environ["PLEXUS_API_KEY"], source_id="pi-fieldunit-03")
-px.send("battery.voltage", 11.8)          # class=metric, batched for you
+px.send("battery.voltage", 11.8)          # class=metric, one message per call
 px.event("fault", "undervoltage lockout")  # class=event
 ```
+
+`send()` does not batch. Above a few readings a second, use `with px.batch(interval_ms=50) as b:` as shown at the top.
 
 If you must hand-roll: `requests` with a `Session` for connection pooling, same batching + backoff rules, key from `os.environ["PLEXUS_API_KEY"]`, flush on a background thread on a 5-second tick.
 
@@ -247,11 +252,13 @@ If they see `{"success":true,"count":1,"source_id":"test-laptop"}`, auth + conne
 
 ```bash
 curl -H "x-api-key: $PLEXUS_API_KEY" \
-  https://plexus-data-api.fly.dev/v1/sources/test-laptop/metrics/latest
+  https://api.plexus.company/v1/sources/test-laptop/metrics/latest
 ```
 
 ## When unsure
 
-The ingest contract above is the authority for the device side. For reading data back, fetch `https://plexus-data-api.fly.dev/openapi.json` or use the generic `plexus` skill.
+The ingest contract above is the authority for the device side. For reading data back, fetch `https://api.plexus.company/openapi.json` or use the generic `plexus` skill.
 
 Corrected 2026-08-28 against gateway source (`ingest.go`, `validate.go`): the array is `points` not `metrics`, `class` is required, timestamps must be numeric, and the response is `{success, count, source_id}`. Every template in the previous version of this file would have 400'd.
+
+Corrected 2026-09-22: `class` is inferred on HTTP `/ingest` when missing (it was documented as a 400) but is required on the WebSocket, so set it anyway; per-device keys via "Limit to device slug"; the read API host is `api.plexus.company`; `px.send()` is one message per call, not batched.

@@ -182,8 +182,8 @@ class RateLimitedError(PlexusError):
 # The wire slug rule (gateway validate.go sourceIDPattern, max length =
 # MaxStringLen 256) — the old stricter local regex rejected dots, 1-char and
 # >63-char slugs that the gateway accepts. Uuid-shaped slugs are additionally
-# rejected (TypeScript SDK parity): the Plexus app resolves uuid-shaped refs
-# as internal ids, which would make such a source unreachable.
+# rejected: the Plexus app resolves uuid-shaped refs as internal ids, which
+# would make such a source unreachable.
 _SOURCE_ID_RE = re.compile(r'^[a-z0-9][a-z0-9._-]*$')
 _SOURCE_ID_UUID_RE = re.compile(
     r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
@@ -271,7 +271,7 @@ class Plexus:
         if not self.api_key:
             raise ValueError(
                 "No API key. Pass api_key=... or set PLEXUS_API_KEY. "
-                "Get a key at app.plexus.company/devices."
+                "Get a key at app.plexus.company/api."
             )
 
         self.endpoint = (endpoint or get_endpoint()).rstrip("/")
@@ -372,9 +372,9 @@ class Plexus:
     def _infer_class(value: FlexValue) -> str:
         """Numbers are metrics; everything else (str/bool/dict/list) is an event.
 
-        Mirrors the gateway (ingest.go inferClass) and the TypeScript SDK
-        (wire.ts inferClass). bool is a subclass of int in Python, so it must
-        be excluded explicitly or True/False would wrongly become metrics.
+        Mirrors the gateway, which infers class the same way on HTTP /ingest
+        (ingest.go). bool is a subclass of int in Python, so it must be
+        excluded explicitly or True/False would wrongly become metrics.
         """
         return "metric" if isinstance(value, (int, float)) and not isinstance(value, bool) else "event"
 

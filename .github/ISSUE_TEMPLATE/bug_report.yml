@@ -6,9 +6,9 @@ body:
   - type: input
     id: agent-version
     attributes:
-      label: Agent Version
+      label: SDK Version
       description: Output of `plexus --version` or version in pyproject.toml
-      placeholder: "0.9.6"
+      placeholder: "0.11.5"
     validations:
       required: true
 
@@ -57,8 +57,8 @@ body:
     id: extras
     attributes:
       label: Installed Extras
-      description: Which optional extras are installed? (e.g., sensors, can, mavlink, camera)
-      placeholder: "pip install plexus-python[sensors,can]"
+      description: Which optional extras are installed? The only one is `video`.
+      placeholder: "pip install plexus-python[video]"
 
   - type: textarea
     id: logs
