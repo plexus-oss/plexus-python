@@ -1,10 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [0.11.6] - 2026-09-22 - Docs and skills catch up
 
 Docs and agent skills caught up with the platform. The only code change is
-one error message. The skills ship inside the wheel, so these reach users on
-the next release.
+one error message. The skills ship inside the wheel, so this release is how
+they reach users.
 
 ### Fixed
 
@@ -62,6 +62,12 @@ the next release.
   copy still installed `[sensors]` and `[picamera]` extras that were removed
   in 0.2.0. It also links `github.com/plexus-oss/plexus-python` and
   `app.plexus.company/api` now.
+
+- **The skills read device events from `/v1/sources/{id}/events`.** It is
+  live on the data API as of 2026-09-22. `/logs` still works as an alias.
+
+- **Rate limits quote the gateway's current ceiling**: 2,000 messages/s per
+  connection and per source, not the old 500/s.
 
 ## [0.11.5] - 2026-09-21 - The commands API is off
 
