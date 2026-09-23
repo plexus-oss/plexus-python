@@ -24,8 +24,7 @@ plexus whoami                          # Show the local credential summary
 
 `plexus init` opens a browser to `app.plexus.company/auth/cli`, waits for the callback, and
 persists the issued key to `~/.plexus/config.json`. Alternatively, set `PLEXUS_API_KEY` (or pass
-`api_key=` to `Plexus()`) instead of running `init`; get a key at app.plexus.company/api. The optional
-"Limit to device slug" field there binds a key to one `source_id`; use it for devices in customer hands.
+`api_key=` to `Plexus()`) instead of running `init`; get a key at app.plexus.company/api.
 
 ## Exit Codes
 

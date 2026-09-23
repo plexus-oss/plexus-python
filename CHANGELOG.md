@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Removed "Limit to device slug" from the docs and skills.** The field is
+  gone from the API keys page.
+
 ## [0.11.6] - 2026-09-22 - Docs and skills catch up
 
 Docs and agent skills caught up with the platform. The only code change is

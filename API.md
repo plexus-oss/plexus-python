@@ -72,12 +72,6 @@ Plexus uses API keys for all authentication:
 2. Go to [app.plexus.company/api](https://app.plexus.company/api)
 3. Create an API key (starts with `plx_`)
 
-**Limit to device slug** (optional, on the same form) binds the key to one
-`source_id`. The gateway then refuses it for any other source: `403` on
-`/ingest`, and a `source_not_allowed` error on the WebSocket. Use a bound key
-on every device you put in a customer's hands, so a key pulled off one unit
-cannot write as the rest of your fleet. Leave it empty for a fleet key that can
-write as any source in your org.
 
 ## HTTP API
 

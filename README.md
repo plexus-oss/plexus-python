@@ -20,8 +20,6 @@ px.send("temperature", 72.5)
 
 Get an API key at [app.plexus.company/api](https://app.plexus.company/api), or run `plexus init` to authorize the machine in a browser.
 
-When you create a key there, you can fill in **Limit to device slug**. That key can then only send as that one `source_id`; the gateway refuses it for any other. Use one of these for every device you put in a customer's hands, so a key pulled off one unit cannot write as the rest of your fleet.
-
 ## Device identity
 
 Every device needs a unique `source_id`. The recommended way to set one on a real host is the bootstrap script, which requires a device name up front:

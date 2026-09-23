@@ -40,7 +40,7 @@ Read keys from env, never hardcode:
 - `PLEXUS_API_KEY` — server / CLI
 - `NEXT_PUBLIC_PLEXUS_API_KEY` — client-side Next.js (only if the user explicitly accepts the trade-off)
 
-Keys are made at `https://app.plexus.company/api`. The optional **Limit to device slug** field binds a key to one `source_id`; the gateway then refuses it for any other source (`403` on `/ingest`). Recommend a bound key per device for hardware that ships to customers, and a fleet key only for servers you control.
+Keys are made at `https://app.plexus.company/api`.
 
 ## Endpoint cheat sheet
 

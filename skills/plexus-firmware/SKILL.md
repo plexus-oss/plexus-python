@@ -120,7 +120,6 @@ The `source_id` must be stable across reboots **and unique across the fleet**. U
 - ESP32 / Arduino: NVS / preferences storage, **not** hardcoded in firmware
 - Raspberry Pi / Linux: `/etc/plexus/key` with mode 0600, or env var
 - Never compile keys into a binary that ships to multiple devices — one leak compromises the fleet
-- For devices in customer hands, give each one its own key made at `https://app.plexus.company/api` with **Limit to device slug** set to its `source_id`. The gateway refuses that key for any other source (`403`), so a key pulled off one unit cannot write as the rest of the fleet
 
 ### 5. Bound memory
 
@@ -261,4 +260,4 @@ The ingest contract above is the authority for the device side. For reading data
 
 Corrected 2026-08-28 against gateway source (`ingest.go`, `validate.go`): the array is `points` not `metrics`, `class` is required, timestamps must be numeric, and the response is `{success, count, source_id}`. Every template in the previous version of this file would have 400'd.
 
-Corrected 2026-09-22: `class` is inferred on HTTP `/ingest` when missing (it was documented as a 400) but is required on the WebSocket, so set it anyway; per-device keys via "Limit to device slug"; the read API host is `api.plexus.company`; `px.send()` is one message per call, not batched.
+Corrected 2026-09-22: `class` is inferred on HTTP `/ingest` when missing (it was documented as a 400) but is required on the WebSocket, so set it anyway; the read API host is `api.plexus.company`; `px.send()` is one message per call, not batched.
