@@ -2,7 +2,49 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`@px.command(...)`: commands declared by your code**, with a title, typed
+  parameters, a danger level, an expiry and a concurrency rule. Sent in
+  `device_auth.commands` with `protocol: 1`. The handler is called as
+  `handler(run, **params)`, with parameters validated and coerced first. A
+  declaration the gateway or dashboard would reject raises at decoration time.
+
+  ```python
+  @px.command("power_off", title="Power off", danger="critical", idempotent=True,
+              expires_in=30,
+              params={"outlet": {"type": "integer", "minimum": 1, "maximum": 8}})
+  def power_off(run, outlet):
+      pdu.outlet(outlet).off()
+      return {"outlet": outlet, "state": "off"}
+  ```
+
+- **`command_run` / `command_status` protocol.** Each run is answered
+  `acknowledged` → `running` → `succeeded` or `failed` (with an `error_code`),
+  with a `seq` per run. Expiry (`ttl_ms`) is judged on a monotonic clock. The
+  last 256 run ids are remembered, so a redelivered run is re-reported, never
+  run twice. Unacknowledged statuses are replayed after a reconnect behind a
+  `command_sync`. `store_results: false` keeps results and error text on the
+  device.
+- **`px.serve()`** blocks until Ctrl+C or SIGTERM, for a client that only
+  answers commands. `px.stop_serving()` unblocks it.
+- `plexus.CommandRun`, `plexus.CommandDeclarationError` and
+  `plexus.CommandParamError` are exported.
+
+Nothing in Plexus triggers a handler yet; the dashboard side is still being
+built. Declaring commands today is safe.
+
+### Deprecated
+
+- **`px.on_command(...)`** emits a `DeprecationWarning`. It keeps its
+  signature and its `command_result` frames.
+
 ### Changed
+
+- **`on_command` handlers are no longer listed in `device_auth.commands`.**
+  The gateway validates every entry of a `protocol: 1` manifest as v1, so a
+  legacy entry would draw an `invalid_command` error on every connect. They
+  still answer `typed_command`; nothing ever read their manifest.
 
 - **Removed "Limit to device slug" from the docs and skills.** The field is
   gone from the API keys page.

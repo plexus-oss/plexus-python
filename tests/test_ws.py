@@ -173,10 +173,10 @@ def test_command_roundtrip(gateway):
     t.start()
     try:
         assert t.wait_authenticated(timeout=3)
-        # Advertised in auth frame
-        assert gateway.auth_frame["commands"] == [
-            {"name": "reboot", "description": "reboot device"}
-        ]
+        # Legacy handlers are not advertised: a protocol-1 manifest carries
+        # @px.command declarations only, and the gateway rejects anything else.
+        assert gateway.auth_frame["protocol"] == 1
+        assert "commands" not in gateway.auth_frame
 
         gateway.send_command_sync("cmd-42", "reboot", {"delay_s": 10})
 

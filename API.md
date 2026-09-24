@@ -199,9 +199,9 @@ recording.
 ### Connection Flow
 
 1. Device connects to the gateway
-2. Device authenticates with API key (and advertises any registered commands)
+2. Device authenticates with API key (and declares any commands it offers)
 3. Device streams `telemetry` frames
-4. Plexus invokes registered commands via `typed_command` (see the note under Commands)
+4. Plexus asks the device to run a declared command with `command_run`, and the device answers with `command_status` frames (see Commands below)
 
 ### Device Authentication
 
@@ -214,7 +214,8 @@ Devices authenticate using an API key. The gateway echoes the declared `source_i
   "api_key": "plx_xxxxx",
   "source_id": "drone-01",
   "platform": "python-sdk",
-  "agent_version": "0.8.0"
+  "agent_version": "0.8.0",
+  "protocol": 1
 }
 
 // Server → Device
@@ -238,14 +239,18 @@ Devices authenticate using an API key. The gateway echoes the declared `source_i
 | `device_auth`    | Authenticate on connect (see above)             |
 | `telemetry`      | Sensor data points                              |
 | `heartbeat`      | Liveness ping (every 30s)                       |
-| `command_result` | `ack` / `result` / `error` for a typed command  |
+| `command_status` | Progress of one command run (protocol v1)       |
+| `command_sync`   | After reconnect: the runs this client still knows about |
+| `command_result` | `ack` / `result` / `error` for a legacy typed command |
 
 **Server → Device**
 
-| Type            | Description                                            |
-| --------------- | ----------------------------------------------------- |
-| `authenticated` | Auth accepted; carries `server_time_ms`               |
-| `typed_command` | Invoke a command the device registered via `on_command` |
+| Type                 | Description                                            |
+| -------------------- | ------------------------------------------------------ |
+| `authenticated`      | Auth accepted; carries `server_time_ms`, and for protocol v1 `store_results` and `max_frame_bytes` |
+| `command_run`        | Run a declared command (protocol v1)                   |
+| `command_status_ack` | The server has the statuses for this run up to `seq`   |
+| `typed_command`      | Invoke a command the device registered via `on_command` |
 
 ### Telemetry
 
@@ -261,11 +266,85 @@ Devices authenticate using an API key. The gateway echoes the declared `source_i
 }
 ```
 
-### Commands
+### Commands (protocol v1)
 
-Commands reach the device as a single `typed_command` envelope; the device replies with `command_result` frames. Register handlers with `px.on_command(...)` before the first `send()`.
+A client declares its commands in the auth frame and answers each run with
+`command_status` frames. The Python SDK does all of this behind
+`@px.command(...)`; this is the wire contract another SDK would implement.
 
-> **Note:** the public API route for sending commands (`POST /v1/sources/{id}/commands`) was turned off on 2026-09-21 and returns `410 Gone`. Nothing in Plexus can currently trigger a custom handler.
+> **Status:** nothing in Plexus sends `command_run` yet. The Commands page and
+> its permission are still being built. `POST /v1/sources/{id}/commands` returns
+> `410 Gone`: commands are triggered by a person on a dashboard, never by an API key.
+
+```json
+// Device → Server: the declaration rides the auth frame
+{
+  "type": "device_auth", "api_key": "plx_xxxxx", "source_id": "pod-07",
+  "platform": "python-sdk", "agent_version": "0.11.6", "protocol": 1,
+  "commands": [{
+    "name": "power_off", "title": "Power off",
+    "danger": "critical", "idempotent": true,
+    "expires_in_s": 30.0, "concurrency": "accept",
+    "params": {
+      "outlet": { "type": "integer", "minimum": 1, "maximum": 8, "required": true }
+    }
+  }]
+}
+
+// Server → Device
+{ "type": "authenticated", "source_id": "pod-07", "server_time_ms": 1746100800000,
+  "protocol": 1, "store_results": true, "max_frame_bytes": 65536 }
+
+// Server → Device: ttl_ms is what REMAINS at send, not a deadline
+{ "type": "command_run", "run_id": "0f0c…", "command": "power_off",
+  "params": { "outlet": 3 }, "ttl_ms": 29500, "attempt": 1 }
+
+// Device → Server: one per transition, seq counts up per run
+{ "type": "command_status", "run_id": "0f0c…", "seq": 1, "state": "acknowledged" }
+{ "type": "command_status", "run_id": "0f0c…", "seq": 2, "state": "running" }
+{ "type": "command_status", "run_id": "0f0c…", "seq": 3, "state": "succeeded",
+  "result": { "outlet": 3, "state": "off" } }
+
+// Server → Device: the client may drop statuses up to this seq
+{ "type": "command_status_ack", "run_id": "0f0c…", "seq": 3 }
+
+// Device → Server: after a reconnect, before replaying unacked statuses
+{ "type": "command_sync", "runs": [{ "run_id": "0f0c…", "state": "succeeded", "seq": 3 }] }
+```
+
+`state` is `acknowledged`, `running`, `progress`, `succeeded` or `failed`. A
+refusal is `failed` with an `error_code`:
+
+| `error_code`         | Meaning                                                    |
+| -------------------- | ---------------------------------------------------------- |
+| `unknown_command`    | This client declares no such command                       |
+| `bad_params`         | Params don't match the declared schema; the handler never ran |
+| `expired_on_arrival` | `ttl_ms` had already run out; the handler never ran        |
+| `busy`               | `concurrency: "reject"` and a run of this command is going |
+| `duplicate`          | This `run_id` is already being handled                     |
+| `handler_error`      | The handler raised                                         |
+| `cancelled`          | The handler ended the run itself                           |
+
+Rules:
+
+- Acknowledge before running. Never run one `run_id` twice (the Python SDK remembers 256).
+- Measure `ttl_ms` on a monotonic clock from the moment the frame arrives.
+- Hold every status until it is acked; after a reconnect send `command_sync`, then replay.
+- When `store_results` is `false`, send the state and `error_code` only: no `result`, `error_message` or progress `message`.
+- A `command_status` frame is at most 64 KB; drop the `result` rather than the status.
+- `params` is a flat map, name → spec (not a JSON Schema `object` wrapper). `type` is
+  `string` (`maxLength`, `enum` of 1–64 strings), `integer`/`number` (`minimum`,
+  `maximum`, `unit`) or `boolean`, plus `title`, `description`, `default` (already the
+  declared type, within bounds) and `required`. At most 16 params; names match
+  `^[a-z][a-z0-9_]{0,63}$`. No nesting, no arrays. The gateway answers a bad
+  entry with an `invalid_command` error frame.
+- Only v1 declarations go in `commands`. A client with none omits the key.
+
+### Commands (legacy `on_command`)
+
+Deprecated; kept for `px.on_command(...)` clients. A `typed_command` envelope
+in, `command_result` frames out. Legacy handlers are not advertised in
+`device_auth`.
 
 ```json
 // Server → Device

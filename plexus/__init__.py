@@ -21,12 +21,20 @@ from plexus.client import (
     RateLimitedError,
     read_mjpeg_frames,
 )
+from plexus.commands import (
+    CommandDeclarationError,
+    CommandParamError,
+    CommandRun,
+)
 from plexus.config import RetryConfig
 
 __version__ = "0.11.6"
 __all__ = [
     "AuthenticationError",
     "BatchSender",
+    "CommandDeclarationError",
+    "CommandParamError",
+    "CommandRun",
     "Plexus",
     "PlexusError",
     "RateLimitedError",

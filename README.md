@@ -247,24 +247,49 @@ Either way, plain `px.send()` is one message per call; it does not batch. `px.se
 
 **On the Free plan** the gateway refuses the device WebSocket (`streaming_requires_plan`). The SDK falls back to HTTP by itself, so `send()`, `send_batch()`, `batch()` and `event()` all still work. Live streaming and video need a paid plan. Free also caps you at 3 devices and 7 days of history.
 
-### Handling commands
+### Commands
 
-Register a handler before the first `send()` so the command is advertised in the auth frame:
+Declare what your code can be asked to do. Declare before the first `send()`:
+the declaration travels in the auth frame.
 
 ```python
-def reboot(name, params):
-    delay = params.get("delay_s", 0)
-    # ... reboot logic ...
-    return {"ok": True, "delay": delay}
+from plexus import Plexus
 
-px = Plexus()
-px.on_command("reboot", reboot, description="reboot the device")
-px.send("temperature", 72.5)   # opens the socket, waits for auth
+px = Plexus(source_id="pod-07")
+
+@px.command("power_off", title="Power off", danger="critical", idempotent=True,
+            expires_in=30,
+            params={"outlet": {"type": "integer", "minimum": 1, "maximum": 8}})
+def power_off(run, outlet):
+    pdu.outlet(outlet).off()                 # your code
+    return {"outlet": outlet, "state": "off"}
+
+px.serve()   # blocks until Ctrl+C / SIGTERM; or keep calling px.send(...)
 ```
 
-The SDK sends an `ack` frame before invoking the handler, then a `result` frame with whatever the handler returns (or an `error` frame if it raises).
+The handler is called as `handler(run, **params)`, with every parameter already
+checked and coerced; a bad parameter is refused before your code runs. The
+return value becomes the run's result; an exception makes the run `failed`.
 
-> **Note:** nothing in Plexus can currently trigger a custom handler. The API route for sending commands was turned off on 2026-09-21. Triggering handlers from a dashboard, with permissions and a record of every run, is being rebuilt.
+| Argument      | What it does |
+| ------------- | ------------ |
+| `params`      | `{name: spec}`: `string` (`maxLength`, `enum`), `integer`/`number` (`minimum`, `maximum`, `unit`), `boolean`, plus `title`, `description`, `default`, `required`. At most 16. Flat: no nesting, no arrays |
+| `danger`      | `normal` (one click), `dangerous` (confirm dialog), `critical` (confirm + type the device slug) |
+| `idempotent`  | True when running it twice is harmless. Only idempotent runs are redelivered after a drop |
+| `expires_in`  | Seconds a run stays worth doing, 5–3600. A late run is refused, not queued |
+| `concurrency` | `accept` allows overlapping runs; `reject` refuses a second while one is going |
+
+The SDK acknowledges each run, never runs the same run id twice, judges expiry
+on a monotonic clock, and replays unacknowledged statuses after a reconnect. If
+your org stores command metadata only, no result or error text leaves the device.
+
+> **Note:** nothing in Plexus can trigger a handler yet. The Commands page, its
+> permission and the run record are still being built. Declaring commands today
+> is safe.
+
+`px.on_command(name, handler, ...)` is deprecated. It still answers commands
+with its old `handler(command_name, params_dict)` signature, but is no longer
+advertised in the auth frame.
 
 ## Environment Variables
 

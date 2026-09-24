@@ -61,6 +61,32 @@ px.event("log", {"level": "error", "msg": "IMU read timed out"})
 px = Plexus(api_key="plx_xxxxx", persistent_buffer=False)
 ```
 
+### Commands
+
+Declare what this client can be asked to do. Declare before the first `send()`.
+
+```python
+@px.command("power_off", title="Power off", danger="critical", idempotent=True,
+            expires_in=30,
+            params={"outlet": {"type": "integer", "minimum": 1, "maximum": 8}})
+def power_off(run, outlet):
+    return {"outlet": outlet, "state": "off"}
+
+px.serve()   # blocks until Ctrl+C / SIGTERM; px.stop_serving() unblocks it
+```
+
+| Argument | Values |
+| --- | --- |
+| `params` | `{name: {"type": "string"\|"integer"\|"number"\|"boolean", ...}}`; `maxLength`/`enum` (≤64) for strings, `minimum`/`maximum`/`unit` for numbers, plus `required`, `default`, `title`, `description`. ≤16 params. Flat |
+| `danger` | `normal` \| `dangerous` \| `critical` |
+| `idempotent` | bool, default False |
+| `expires_in` | seconds, 5–3600, default 30 |
+| `concurrency` | `accept` \| `reject` |
+
+Handlers are called as `handler(run, **params)`; params are validated and
+coerced first. `px.on_command(...)` is deprecated and not advertised in the
+auth frame. Nothing in Plexus triggers a handler yet.
+
 ## Key Conventions
 
 - Config lives in `~/.plexus/config.json`

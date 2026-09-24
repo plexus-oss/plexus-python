@@ -20,6 +20,26 @@ uses the `authenticated` frame only for the `server_time_ms` clock sync.
               "event": "result" | "error", "result": {...} | "error": "..."}
     server → {"type": "error", "code": "RATE_LIMITED" | ..., "detail": "..."}
 
+Commands protocol v1 (`@px.command`) runs alongside that legacy pair:
+
+    client → device_auth ... "protocol": 1, "commands": [{name, title, params,
+              danger, idempotent, expires_in_s, concurrency}, ...]
+    server → {"type": "authenticated", ..., "protocol": 1, "store_results": bool,
+              "max_frame_bytes": int}
+    server → {"type": "command_run", "run_id": ..., "command": ..., "params": {...},
+              "ttl_ms": ..., "attempt": 1}
+    client → {"type": "command_status", "run_id": ..., "seq": 1,
+              "state": "acknowledged" | "running" | "progress" | "succeeded" | "failed",
+              "result": {...}?, "error_code": ...?, "error_message": ...?}
+    server → {"type": "command_status_ack", "run_id": ..., "seq": ...}
+    client → {"type": "command_sync", "runs": [{"run_id", "state", "seq"}, ...]}
+
+`ttl_ms` is what remains *at send*, so expiry is judged against this device's
+monotonic clock and never against its wall clock — the two disagree badly on a
+device that boots without NTP. A status that could not be sent, or that nobody
+acknowledged, is kept and replayed after the next reconnect, behind a
+`command_sync` that tells the server which runs this client still knows about.
+
 Runs the read loop on a background daemon thread so callers can stay sync.
 
 Server `error` frames are forwarded to `on_server_error` rather than only
@@ -38,6 +58,7 @@ import random
 import struct
 import threading
 import time
+from collections import OrderedDict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -51,6 +72,13 @@ except ImportError as e:  # pragma: no cover - import-time failure is obvious
     ) from e
 
 from plexus._log import _say
+from plexus.commands import (
+    Cancelled,
+    CommandParamError,
+    CommandRun,
+    DeclaredCommand,
+    coerce_params,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +86,26 @@ AUTH_TIMEOUT_S = 10.0
 HEARTBEAT_INTERVAL_S = 30.0
 BACKOFF_BASE_S = 1.0
 BACKOFF_MAX_S = 60.0
+
+#: Commands wire protocol this client speaks. Advertised in `device_auth`.
+PROTOCOL_VERSION = 1
+
+#: Run ids (and their last known state) kept for de-duplication. A redelivered
+#: run id is re-reported from here; its handler never runs twice.
+MAX_REMEMBERED_RUNS = 256
+
+#: Statuses held while nobody has acknowledged them. Bounded: a client that
+#: never reaches the server must not grow without limit. The oldest go first,
+#: loudly.
+MAX_UNACKED_STATUSES = 256
+
+#: Ceiling for one `command_status` frame. The gateway drops anything larger,
+#: so an oversized result is stripped here — losing the payload beats losing
+#: the outcome.
+MAX_STATUS_FRAME_BYTES = 64 * 1024
+
+#: States that end a run. Nothing follows one for the same run id.
+FINAL_STATES = ("succeeded", "failed")
 
 CommandHandler = Callable[[str, dict[str, Any]], dict[str, Any] | None]
 
@@ -81,6 +129,20 @@ class _RegisteredCommand:
         if self.params:
             m["params"] = self.params
         return m
+
+
+@dataclass
+class _RunRecord:
+    """What this client remembers about one run id.
+
+    Kept after the run finishes so a redelivery can be answered from memory
+    instead of running the handler a second time.
+    """
+
+    run_id: str
+    state: str | None = None
+    seq: int = 0
+    final: dict[str, Any] | None = None
 
 
 class WebSocketTransport:
@@ -121,6 +183,14 @@ class WebSocketTransport:
         self._on_server_error = on_server_error
 
         self._commands: dict[str, _RegisteredCommand] = {}
+        # Commands protocol v1: declarations, what we remember about run ids,
+        # and the statuses nobody has acknowledged yet.
+        self._declared: dict[str, DeclaredCommand] = {}
+        self._command_lock = threading.Lock()
+        self._runs: OrderedDict[str, _RunRecord] = OrderedDict()
+        self._unacked: deque[dict[str, Any]] = deque()
+        self._store_results = True
+        self._max_status_bytes = MAX_STATUS_FRAME_BYTES
         self._ws: websocket.WebSocket | None = None
         self._ws_lock = threading.Lock()
         self._authenticated = threading.Event()
@@ -142,8 +212,11 @@ class WebSocketTransport:
         params: list[dict[str, Any]] | None = None,
         concurrency: str = "accept",
     ) -> None:
-        """Register a command handler. Must be called before start() to be
-        advertised in the auth frame.
+        """Register a legacy command handler, answered over `typed_command`.
+
+        Legacy handlers are not advertised in the auth frame: a protocol-1
+        manifest carries `@px.command` declarations only (see
+        declare_command()).
 
         concurrency controls what happens when a command arrives while a
         previous invocation of the *same* command is still running:
@@ -159,6 +232,23 @@ class WebSocketTransport:
             name=name, handler=handler, description=description,
             params=params or [], concurrency=concurrency,
         )
+
+    def declare_command(self, declaration: DeclaredCommand) -> None:
+        """Declare a protocol-v1 command (`@px.command`).
+
+        Advertised in the auth frame, so declare before start() — or before
+        the first send(), which starts the transport for you.
+        """
+        self._declared[declaration.name] = declaration
+
+    @property
+    def declared_command_names(self) -> list[str]:
+        return list(self._declared)
+
+    @property
+    def store_results(self) -> bool:
+        """False when the org is metadata-only: no result payloads leave here."""
+        return self._store_results
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -307,15 +397,21 @@ class WebSocketTransport:
             self._ws = ws
 
         # 1. Send device_auth
-        auth = {
+        auth: dict[str, Any] = {
             "type": "device_auth",
             "api_key": self.api_key,
             "source_id": self.source_id,
             "platform": self.platform,
             "agent_version": self.agent_version,
+            "protocol": PROTOCOL_VERSION,
         }
-        if self._commands:
-            auth["commands"] = [c.to_manifest() for c in self._commands.values()]
+        # Only v1 declarations are advertised. The gateway validates every
+        # entry of a protocol-1 manifest as v1 and would answer a legacy
+        # on_command entry with an invalid_command error on every connect.
+        # Legacy handlers still answer typed_command; nothing ever read their
+        # manifest, so leaving them out loses nothing.
+        if self._declared:
+            auth["commands"] = [c.to_manifest() for c in self._declared.values()]
         ws.send(json.dumps(auth))
 
         # 2. Wait for authenticated
@@ -338,6 +434,13 @@ class WebSocketTransport:
                 except Exception as e:
                     logger.debug("on_clock_synced callback raised: %s", e)
 
+        # Per-org result storage. Absent means "stored": a gateway that has not
+        # shipped this field yet must not silently turn results off.
+        self._store_results = msg.get("store_results", True) is not False
+        max_bytes = msg.get("max_frame_bytes")
+        if isinstance(max_bytes, int) and 0 < max_bytes < MAX_STATUS_FRAME_BYTES:
+            self._max_status_bytes = max_bytes
+
         was_reconnect = self._backoff_attempt > 0
         self._authenticated.set()
         self._backoff_attempt = 0
@@ -346,6 +449,10 @@ class WebSocketTransport:
             _say(f"✓ Reconnected as {self.source_id}")
         else:
             _say(f"✓ Connected to gateway as {self.source_id}")
+
+        # Tell the server which runs we still know about, then re-send every
+        # status it has not acknowledged.
+        self._resync_commands()
 
         # 3. Read loop with heartbeat pump
         ws.settimeout(1.0)
@@ -376,6 +483,10 @@ class WebSocketTransport:
         mtype = msg.get("type")
         if mtype == "typed_command":
             self._handle_command(msg)
+        elif mtype == "command_run":
+            self._handle_command_run(msg, time.monotonic())
+        elif mtype == "command_status_ack":
+            self._handle_status_ack(msg)
         elif mtype == "error":
             code = str(msg.get("code") or "")
             detail = str(msg.get("detail") or "")
@@ -480,6 +591,251 @@ class WebSocketTransport:
             "result": result if result is not None else {},
         })
 
+    # -------------------------------------------------------- commands v1
+
+    def _handle_command_run(self, msg: dict[str, Any], arrived: float) -> None:
+        """Answer a `command_run` frame. Runs on the read-loop thread.
+
+        Everything here is a fast check; the handler itself goes to its own
+        thread so a slow one can't stall heartbeats or the next frame.
+
+        `arrived` is a `time.monotonic()` reading taken the moment the frame
+        came off the socket. Expiry is measured from it, so a wall-clock jump
+        (NTP landing, an RTC-less device) can neither expire a live run nor
+        revive a dead one.
+        """
+        run_id = msg.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            logger.warning("plexus ws command_run without a run_id, ignored")
+            return
+        name = msg.get("command") or ""
+        attempt = msg.get("attempt")
+        attempt = attempt if isinstance(attempt, int) and attempt > 0 else 1
+
+        # 1. De-duplication. Reserve the id before anything can fail, so a
+        #    redelivery that overtakes our own answer is still caught.
+        with self._command_lock:
+            known = self._runs.get(run_id)
+            if known is None:
+                self._remember(run_id)
+        if known is not None:
+            self._rereport(known)
+            return
+
+        # 2. Is it ours?
+        reg = self._declared.get(name)
+        if reg is None:
+            self._reject(run_id, "unknown_command", f"unknown command: {name}")
+            return
+
+        # 3. Params, checked against the declaration the dashboard drew from.
+        try:
+            params = coerce_params(reg.schema, msg.get("params"))
+        except CommandParamError as e:
+            self._reject(run_id, "bad_params", str(e))
+            return
+
+        # 4. Expiry, measured against the monotonic clock from arrival.
+        ttl_ms = msg.get("ttl_ms")
+        deadline: float | None = None
+        if isinstance(ttl_ms, (int, float)) and not isinstance(ttl_ms, bool):
+            if ttl_ms <= 0:
+                self._reject(
+                    run_id, "expired_on_arrival",
+                    f"run expired before it arrived (ttl_ms={ttl_ms})",
+                )
+                return
+            deadline = arrived + (float(ttl_ms) / 1000.0)
+
+        # 5. concurrency="reject": one run of this command at a time.
+        holds_lock = False
+        if reg.concurrency == "reject":
+            if not reg._lock.acquire(blocking=False):
+                self._reject(run_id, "busy", f"command already running: {reg.name}")
+                return
+            holds_lock = True
+
+        run = CommandRun(
+            id=run_id,
+            command=reg.name,
+            params=params,
+            attempt=attempt,
+            deadline=deadline,
+            _emit=self._emit_status,
+        )
+        self._emit_status(run_id, "acknowledged")
+        try:
+            threading.Thread(
+                target=self._run_declared,
+                args=(reg, run, holds_lock),
+                name=f"plexus-command-{reg.name}",
+                daemon=True,
+            ).start()
+        except Exception as e:
+            # No thread means no handler. Release the concurrency lock so the
+            # command isn't wedged, and report the failure rather than leaving
+            # the run acknowledged forever.
+            if holds_lock:
+                reg._lock.release()
+            self._reject(run_id, "busy", f"could not start handler thread: {e}")
+
+    def _run_declared(
+        self, reg: DeclaredCommand, run: CommandRun, holds_lock: bool
+    ) -> None:
+        """Run one handler on its own thread and report how it went."""
+        self._emit_status(run.id, "running")
+        try:
+            result = reg.handler(run, **run.params)
+        except Cancelled as e:
+            self._emit_status(
+                run.id, "failed", error_code="cancelled",
+                error_message=str(e) or "cancelled by the handler",
+            )
+        except Exception as e:
+            logger.exception("plexus command %s failed", reg.name)
+            self._emit_status(
+                run.id, "failed", error_code="handler_error",
+                error_message=f"{type(e).__name__}: {e}",
+            )
+        else:
+            self._emit_status(run.id, "succeeded", result=_as_result(result))
+        finally:
+            if holds_lock:
+                reg._lock.release()
+
+    def _reject(self, run_id: str, code: str, message: str) -> None:
+        """Refuse a run before it starts. Always `failed` plus a code."""
+        self._emit_status(run_id, "failed", error_code=code, error_message=message)
+
+    def _emit_status(self, run_id: str, state: str, **fields: Any) -> bool:
+        """Send one `command_status`, buffering it until the server acks it.
+
+        `seq` counts up per run. The frame is buffered first and sent second,
+        so a status produced while the socket is down survives to the next
+        reconnect instead of vanishing the way `command_result` does.
+        """
+        frame: dict[str, Any] = {
+            "type": "command_status",
+            "run_id": run_id,
+            "seq": 0,  # set under the lock below
+            "state": state,
+        }
+        for key, value in fields.items():
+            if value is None:
+                continue
+            # metadata_only orgs: the state and the code travel, customer bytes
+            # do not. Stripped here so no code path can leak them.
+            if not self._store_results and key in ("result", "error_message", "message"):
+                continue
+            frame[key] = value
+        with self._command_lock:
+            record = self._runs.get(run_id) or self._remember(run_id)
+            record.seq += 1
+            frame["seq"] = record.seq
+            # Sized after seq is set: it is part of the frame the gateway measures.
+            frame = self._fit_status(frame)
+            if state in FINAL_STATES:
+                record.final = dict(frame)
+            # progress is advisory: it doesn't move the run's state, and it
+            # never pushes a real status out of the replay buffer.
+            if state != "progress":
+                record.state = state
+                if len(self._unacked) >= MAX_UNACKED_STATUSES:
+                    dropped = self._unacked.popleft()
+                    logger.warning(
+                        "plexus dropping unacknowledged command_status "
+                        "(run %s seq %s) — %d already waiting",
+                        dropped.get("run_id"), dropped.get("seq"), MAX_UNACKED_STATUSES,
+                    )
+                self._unacked.append(frame)
+
+        return self._send_frame(frame)
+
+    def _remember(self, run_id: str) -> _RunRecord:
+        """Start remembering a run id, forgetting the oldest past the bound.
+        Caller holds `_command_lock`."""
+        record = self._runs[run_id] = _RunRecord(run_id=run_id)
+        while len(self._runs) > MAX_REMEMBERED_RUNS:
+            self._runs.popitem(last=False)
+        return record
+
+    def _fit_status(self, frame: dict[str, Any]) -> dict[str, Any]:
+        """Make sure the status can actually go on the wire.
+
+        A handler that returns something JSON can't carry, or a result larger
+        than the gateway accepts, must not cost the run its outcome — the
+        payload is described or dropped, the state always travels.
+        """
+        try:
+            size = len(json.dumps(frame))
+        except (TypeError, ValueError):
+            logger.warning(
+                "plexus command result for run %s is not JSON-serialisable — "
+                "sending its repr instead",
+                frame.get("run_id"),
+            )
+            frame = dict(frame)
+            if "result" in frame:
+                frame["result"] = {"value": repr(frame["result"])[:512]}
+            return frame
+        if size <= self._max_status_bytes:
+            return frame
+        trimmed = {k: v for k, v in frame.items() if k not in ("result", "message")}
+        logger.warning(
+            "plexus command_status for run %s exceeded %d bytes — result dropped",
+            frame.get("run_id"), self._max_status_bytes,
+        )
+        if len(json.dumps(trimmed)) > self._max_status_bytes:
+            trimmed.pop("error_message", None)
+        return trimmed
+
+    def _rereport(self, record: _RunRecord) -> None:
+        """Answer a redelivered run id from memory. The handler never reruns."""
+        if record.final is not None:
+            replay = dict(record.final)
+            self._emit_status(
+                record.run_id,
+                replay["state"],
+                result=replay.get("result"),
+                error_code=replay.get("error_code"),
+                error_message=replay.get("error_message"),
+            )
+            return
+        if record.state:
+            # Still in flight. Re-report where it actually is rather than
+            # inventing an outcome for a job that is still running.
+            self._emit_status(record.run_id, record.state)
+            return
+        # Known id, no state yet: two deliveries raced into dispatch. Refuse
+        # the second one — the first is about to answer for both.
+        self._reject(record.run_id, "duplicate", f"run {record.run_id} is already being handled")
+
+    def _handle_status_ack(self, msg: dict[str, Any]) -> None:
+        """`command_status_ack` — drop buffered statuses up to `seq`."""
+        run_id = msg.get("run_id")
+        seq = msg.get("seq")
+        if not isinstance(run_id, str) or not isinstance(seq, int):
+            return
+        with self._command_lock:
+            self._unacked = deque(
+                f for f in self._unacked
+                if not (f.get("run_id") == run_id and f.get("seq", 0) <= seq)
+            )
+
+    def _resync_commands(self) -> None:
+        """After auth: say what we remember, then replay what wasn't acked."""
+        with self._command_lock:
+            runs = [
+                {"run_id": r.run_id, "state": r.state, "seq": r.seq}
+                for r in self._runs.values()
+                if r.state
+            ]
+            pending = list(self._unacked)
+        if runs:
+            self._send_frame({"type": "command_sync", "runs": runs})
+        for frame in pending:
+            self._send_frame(frame)
+
     def _send_frame(self, frame: dict[str, Any]) -> bool:
         with self._ws_lock:
             ws = self._ws
@@ -494,6 +850,20 @@ class WebSocketTransport:
 
 
 # --------------------------------------------------------------------- helpers
+
+
+def _as_result(value: Any) -> dict[str, Any]:
+    """Normalise a handler's return value into the `result` object.
+
+    A dict goes as-is, None becomes `{}`, and anything else is wrapped so a
+    handler that returns a bare number or string still reports something the
+    dashboard can show.
+    """
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    return {"value": value}
 
 
 def _encode_binary_video_frame(

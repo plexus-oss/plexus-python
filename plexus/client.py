@@ -32,12 +32,14 @@ import json
 import logging
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import threading
 import time
 import urllib.error
 import urllib.request
+import warnings
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -45,6 +47,7 @@ from typing import TYPE_CHECKING, Any, Union
 
 from plexus._log import _say
 from plexus.buffer import BufferBackend, MemoryBuffer, SqliteBuffer
+from plexus.commands import declare as declare_command
 from plexus.config import (
     RetryConfig,
     get_api_key,
@@ -290,6 +293,7 @@ class Plexus:
         self._ws_url = (ws_url or get_gateway_ws_url())
         self._ws = None  # lazily constructed in _ensure_ws()
         self._ws_auth_waited = False  # first-send auth wait paid at most once
+        self._serve_stop = threading.Event()  # set by serve()'s signal handlers
         self._clock_offset_ms: int = 0
 
         # Pluggable buffer backend for failed sends
@@ -1065,6 +1069,147 @@ class Plexus:
         t.start()
         return stop_event
 
+    def command(
+        self,
+        name: str,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        params: dict[str, dict[str, Any]] | None = None,
+        danger: str = "normal",
+        idempotent: bool = False,
+        expires_in: float = 30.0,
+        concurrency: str = "accept",
+    ):
+        """Declare a command this client can be asked to run.
+
+            @px.command("power_off", title="Power off", danger="critical",
+                        idempotent=True, expires_in=30,
+                        params={"outlet": {"type": "integer",
+                                           "minimum": 1, "maximum": 8}})
+            def power_off(run, outlet):
+                pdu.outlet(outlet).off()
+                return {"outlet": outlet, "state": "off"}
+
+            px.serve()   # or keep calling px.send(...) in your own loop
+
+        The handler is called as `handler(run, **params)`: `run` carries the
+        run id, and every declared parameter arrives as a keyword argument,
+        already checked and coerced to its declared type. Its return value
+        becomes the run's `result`; an exception becomes a `failed` run.
+
+        Declare before the first `send()` — the declaration travels in the
+        auth frame, and the dashboard can only offer what it has been told
+        about.
+
+        Args:
+            name: `^[a-z][a-z0-9_]{0,63}$`. Unique for this source.
+            title: What the control is called on screen. Defaults to `name`.
+            description: One line under the title.
+            params: `{name: schema}` in the subset every SDK understands —
+                `string` (`maxLength`, `enum`), `integer` / `number`
+                (`minimum`, `maximum`, `unit`), `boolean`, plus `title`,
+                `description`, `default` and `required`. No nesting, no
+                arrays. A parameter is required unless it has a `default` or
+                says `"required": False`.
+            danger: `"normal"` (one click), `"dangerous"` (confirm dialog) or
+                `"critical"` (confirm dialog plus typing the device's slug).
+            idempotent: True when running it twice is harmless. Only
+                idempotent runs are ever redelivered after a connection drop.
+            expires_in: Seconds a run stays worth doing, 5–3600. A run that
+                arrives past its expiry is refused, not queued.
+            concurrency: `"accept"` runs overlapping runs of this command
+                concurrently; `"reject"` refuses a second while one is still
+                going. Use `"reject"` for exclusive hardware.
+
+        Raises:
+            CommandDeclarationError: if the declaration is something the wire
+                protocol or the dashboard could not carry. Raised at
+                decoration time, so a bad declaration fails on import.
+        """
+        def decorator(handler):
+            declaration = declare_command(
+                name,
+                handler,
+                title=title,
+                description=description,
+                params=params,
+                danger=danger,
+                idempotent=idempotent,
+                expires_in=expires_in,
+                concurrency=concurrency,
+            )
+            ws = self._ensure_ws()
+            if ws.is_authenticated:
+                logger.warning(
+                    "@px.command('%s') declared after the connection is already "
+                    "authenticated — it will not reach the dashboard until the next "
+                    "reconnect. Declare commands before the first send().",
+                    name,
+                )
+            ws.declare_command(declaration)
+            return handler
+
+        return decorator
+
+    def serve(self, timeout: float | None = None) -> None:
+        """Block here, keeping the connection open, until asked to stop.
+
+        For a client whose whole job is answering commands and which sends no
+        telemetry of its own — without this, the process would exit and take
+        the socket with it.
+
+            px = Plexus(source_id="pod-07")
+
+            @px.command("power_off", danger="critical")
+            def power_off(run):
+                ...
+
+            px.serve()
+
+        Returns on SIGINT (Ctrl+C), SIGTERM, `stop_serving()` from another
+        thread, or `timeout` seconds if one is given, and closes the client on
+        the way out. Reconnects are the transport's job and happen underneath
+        this call.
+        """
+        ws = self._ensure_ws()
+        self._serve_stop.clear()
+
+        declared = ws.declared_command_names
+        if declared:
+            _say(f"serving {len(declared)} command(s) as {self.source_id}: {', '.join(declared)}")
+        else:
+            _say(f"serving as {self.source_id} — no commands declared")
+
+        previous: list[tuple[int, Any]] = []
+
+        def _on_signal(signum, _frame):  # pragma: no cover - exercised by hand
+            logger.info("plexus serve() received signal %s, shutting down", signum)
+            self._serve_stop.set()
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                previous.append((sig, signal.signal(sig, _on_signal)))
+            except (ValueError, OSError, AttributeError):
+                # Not the main thread, or a platform without this signal.
+                # Ctrl+C still raises KeyboardInterrupt below.
+                pass
+        try:
+            self._serve_stop.wait(timeout)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            for sig, handler in previous:
+                try:
+                    signal.signal(sig, handler)
+                except (ValueError, OSError):
+                    pass
+            self.close()
+
+    def stop_serving(self) -> None:
+        """Unblock `serve()`. Safe from any thread."""
+        self._serve_stop.set()
+
     def on_command(
         self,
         name: str,
@@ -1076,12 +1221,19 @@ class Plexus:
     ) -> None:
         """Register a command handler (WebSocket transport only).
 
+        .. deprecated::
+            Use `@px.command(...)`, which declares titles, typed parameters,
+            a danger level and an expiry, and reports through the
+            `command_status` protocol. `on_command` keeps its old signature
+            and its old `command_result` frames.
+
         The handler is called as `handler(command_name, params_dict)` and may
         return a dict (→ `result`) or raise (→ `error`). An `ack` is sent
         automatically before the handler runs.
 
-        Must be called before the first send() so the command is advertised
-        in the auth frame.
+        Legacy handlers are no longer advertised in the auth frame — only
+        `@px.command` declarations are — but they still answer
+        `typed_command` frames exactly as before.
 
         concurrency: "accept" (default) runs overlapping invocations of the
             same command concurrently; "reject" refuses a new invocation with
@@ -1089,14 +1241,13 @@ class Plexus:
             "reject" for handlers that drive exclusive hardware (e.g. a pump
             init) so a retry or double-click can't start two at once.
         """
+        warnings.warn(
+            "px.on_command() is deprecated; use the @px.command(...) decorator, "
+            "which declares typed parameters, a danger level and an expiry.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         ws = self._ensure_ws()
-        if ws.is_authenticated:
-            logger.warning(
-                "on_command('%s') called after connection is already authenticated — "
-                "command will not be advertised to the dashboard until next reconnect. "
-                "Call on_command() before the first send().",
-                name,
-            )
         ws.register_command(
             name, handler, description=description, params=params,
             concurrency=concurrency,
