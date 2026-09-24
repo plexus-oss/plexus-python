@@ -339,6 +339,9 @@ Rules:
   `^[a-z][a-z0-9_]{0,63}$`. No nesting, no arrays. The gateway answers a bad
   entry with an `invalid_command` error frame.
 - Only v1 declarations go in `commands`. A client with none omits the key.
+- The key must be allowed to declare commands: created with "Receive commands" on
+  the API Keys page, or limited to this device. Otherwise the gateway keeps the
+  connection, ignores `commands`, and sends one `commands_not_permitted` error frame.
 
 ### Commands (legacy `on_command`)
 

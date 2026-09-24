@@ -267,6 +267,9 @@ def power_off(run, outlet):
 px.serve()   # blocks until Ctrl+C / SIGTERM; or keep calling px.send(...)
 ```
 
+Use an API key created with **Receive commands** on the Plexus API Keys page.
+Other keys keep sending telemetry, but their commands are ignored.
+
 The handler is called as `handler(run, **params)`, with every parameter already
 checked and coerced; a bad parameter is refused before your code runs. The
 return value becomes the run's result; an exception makes the run `failed`.
