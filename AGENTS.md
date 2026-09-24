@@ -85,7 +85,8 @@ px.serve()   # blocks until Ctrl+C / SIGTERM; px.stop_serving() unblocks it
 
 Handlers are called as `handler(run, **params)`; params are validated and
 coerced first. `px.on_command(...)` is deprecated and not advertised in the
-auth frame. Nothing in Plexus triggers a handler yet.
+auth frame. A person runs commands from the Plexus Commands page or a dashboard
+panel; the device's key must be created with "Receive commands".
 
 ## Key Conventions
 

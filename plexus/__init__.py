@@ -28,7 +28,7 @@ from plexus.commands import (
 )
 from plexus.config import RetryConfig
 
-__version__ = "0.11.6"
+__version__ = "0.12.0"
 __all__ = [
     "AuthenticationError",
     "BatchSender",

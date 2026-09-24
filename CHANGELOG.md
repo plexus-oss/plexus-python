@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-24 - Commands
+
 ### Added
 
 - **`@px.command(...)`: commands declared by your code**, with a title, typed
@@ -31,8 +33,8 @@
 - `plexus.CommandRun`, `plexus.CommandDeclarationError` and
   `plexus.CommandParamError` are exported.
 
-Nothing in Plexus triggers a handler yet; the dashboard side is still being
-built. Declaring commands today is safe.
+Run them from the **Commands** page or a dashboard panel in Plexus. The device
+must connect with an API key created with **Receive commands**.
 
 ### Deprecated
 

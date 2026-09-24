@@ -286,9 +286,7 @@ The SDK acknowledges each run, never runs the same run id twice, judges expiry
 on a monotonic clock, and replays unacknowledged statuses after a reconnect. If
 your org stores command metadata only, no result or error text leaves the device.
 
-> **Note:** nothing in Plexus can trigger a handler yet. The Commands page, its
-> permission and the run record are still being built. Declaring commands today
-> is safe.
+Run them from the **Commands** page or a dashboard panel in Plexus.
 
 `px.on_command(name, handler, ...)` is deprecated. It still answers commands
 with its old `handler(command_name, params_dict)` signature, but is no longer
