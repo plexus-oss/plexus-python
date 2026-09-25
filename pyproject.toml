@@ -5,14 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "plexus-python"
 version = "0.12.0"
-description = "Thin Python SDK for Plexus — send telemetry in one line"
+description = "Python SDK for Plexus: stream telemetry from drones, robots and IoT devices to live dashboards"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
     { name = "Plexus", email = "info@plexus.company" }
 ]
-keywords = ["telemetry", "iot", "hardware", "observability", "fleet", "monitoring"]
+keywords = ["telemetry", "iot", "hardware", "observability", "fleet", "monitoring", "drones", "robotics", "raspberry-pi", "sensors", "dashboard", "time-series", "aerospace"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

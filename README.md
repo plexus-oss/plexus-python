@@ -1,6 +1,8 @@
 # plexus-python
 
-**Thin Python SDK for [Plexus](https://plexus.company).** Send telemetry to the Plexus gateway in one line. Storage, dashboards, alerts, and fleet management live in the platform — this package just ships your data.
+Plexus is telemetry dashboards for hardware teams: stream data from drones, robots and IoT devices, or connect the database you already run, and get live dashboards and alerts. Website: [plexus.company](https://plexus.company). Docs: [docs.plexus.company](https://docs.plexus.company).
+
+**This is the thin Python SDK for Plexus.** Send telemetry to the Plexus gateway in one line. Storage, dashboards, alerts, and fleet management live in the platform — this package just ships your data.
 
 [![PyPI](https://img.shields.io/pypi/v/plexus-python)](https://pypi.org/project/plexus-python/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
