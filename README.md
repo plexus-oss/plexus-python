@@ -1,6 +1,6 @@
 # plexus-python
 
-Plexus is telemetry dashboards for hardware teams: stream data from drones, robots and IoT devices, or connect the database you already run, and get live dashboards and alerts. Website: [plexus.company](https://plexus.company). Docs: [docs.plexus.company](https://docs.plexus.company).
+Plexus is storage and dashboards for hardware teams: stream data from drones, robots and IoT devices into Plexus Time Series, or connect the database you already run, and get live dashboards and alerts. Website: [plexus.company](https://plexus.company). Docs: [docs.plexus.company](https://docs.plexus.company).
 
 **This is the thin Python SDK for Plexus.** Send telemetry to the Plexus gateway in one line. Storage, dashboards, alerts, and fleet management live in the platform — this package just ships your data.
 
