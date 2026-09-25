@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-09-25 - Package metadata
+
+### Changed
+
+- The README and PyPI page now say what Plexus is: storage and dashboards for
+  hardware teams, with links to plexus.company and the docs.
+- PyPI description and keywords (drones, robotics, raspberry-pi, sensors,
+  dashboard, time-series, aerospace). No code changes.
+
 ## [0.12.0] - 2026-09-24 - Commands
 
 ### Added
