@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-30 - Dashboards as code
+
+### Added
+
+- **`plexus dashboards list / pull / diff / push`**: keep Plexus dashboards as
+  JSON files in your repo (`plexus/dashboards/<uid>.json`). Edit them by hand
+  or with a coding agent, then push. Pushing an unchanged file does nothing;
+  an edit made in the app since your last pull stops the push instead of
+  being overwritten (`--force` to override). `diff` exits 1 on changes, for
+  CI. Needs a key with the `dashboards` scope: run `plexus init --force` if
+  your key is older.
+
 ## [0.12.1] - 2026-09-25 - Package metadata
 
 ### Changed
