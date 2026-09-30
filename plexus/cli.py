@@ -603,7 +603,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = _VersionAwareParser(
         prog="plexus",
-        description="Plexus CLI — auth, send, query telemetry from your terminal.",
+        description="Plexus CLI — auth, dashboards as files, agent skills.",
     )
     # The first thing anyone types when a CLI misbehaves, and previously an
     # error: `plexus --version` demanded a subcommand and told you nothing.
@@ -673,6 +673,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="List the bundled skills and exit without writing anything.",
     )
     skills.set_defaults(func=cmd_skills)
+
+    from .dashboards_cli import add_parser as add_dashboards_parser
+
+    add_dashboards_parser(sub)
 
     return parser
 
