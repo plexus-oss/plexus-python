@@ -272,8 +272,10 @@ A client declares its commands in the auth frame and answers each run with
 `command_status` frames. The Python SDK does all of this behind
 `@px.command(...)`; this is the wire contract another SDK would implement.
 
-> Commands are run by a person from the Plexus Commands page or a dashboard
-> panel, never by an API key: `POST /v1/sources/{id}/commands` returns `410 Gone`.
+> Commands declared this way are run by a person from the Plexus Commands page
+> or a dashboard panel. `POST /v1/sources/{id}/commands` is a separate, older
+> path: it reaches `px.on_command(...)` handlers only, and needs a key with the
+> `write` scope.
 
 ```json
 // Device → Server: the declaration rides the auth frame
