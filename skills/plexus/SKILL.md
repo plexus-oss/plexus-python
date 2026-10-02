@@ -6,7 +6,7 @@ tools: Read, Write, Edit, Bash, WebFetch
 
 # Plexus
 
-Plexus is a telemetry/observability platform for hardware fleets (drones, satellites, robots, edge devices). This skill teaches Claude how to integrate with its public API.
+Plexus is storage and dashboards for hardware teams (drones, satellites, robots, edge devices). This skill teaches Claude how to integrate with its public API.
 
 ## When to use this skill
 
@@ -59,7 +59,7 @@ Keys are made at `https://app.plexus.company/api`.
 
 Per point:
 
-- **Set `class` on every point**: `"metric"` (the value must be a number) or `"event"` (string, bool, object, array). On HTTP `/ingest` a missing `class` is inferred — numbers become metrics, everything else events — but the WebSocket path rejects a point without it, and an explicit class says what you meant. The Python SDK always sets it.
+- **Set `class` on every point**: `"metric"` (the value must be a number) or `"event"` (string, bool, object, array). A missing `class` is inferred — numbers become metrics, everything else events — but an explicit class says what you meant, and `"class": "metric"` on a non-number is a 400. The Python SDK always sets it.
 - **The array is `points`, not `metrics`.** Sending `metrics: [...]` returns `400 {"error":"'points' array is required"}`. This is the single most common mistake.
 - `metric` (string) and `value` are required.
 - `timestamp` must be a **number** — an ISO-8601 string is rejected with `points[i].timestamp must be a number`. Epoch **milliseconds** is the intended unit; a positive value under `1e12` is interpreted as **seconds** and scaled up automatically.
@@ -68,7 +68,8 @@ Per point:
 - The gateway creates the source on first write; no registration step.
 - Event limits: a string value up to 256 bytes, an object/array value up to 4,096 bytes of JSON, up to 16 tags per point. Larger is a 400.
 - **There is no log upload endpoint.** Send log lines that matter as event points, e.g. `{"class":"event","metric":"log","value":{"level":"error","msg":"..."}}` (`px.event("log", {...})` in plexus-python).
-- **Free plan:** `/ingest` works. The device WebSocket and video are refused (`streaming_requires_plan`); plexus-python falls back to HTTP by itself. Free keeps 7 days of history and up to 3 devices.
+- **Free plan:** `/ingest` works. The device WebSocket and video are refused (`streaming_requires_plan`); plexus-python falls back to HTTP by itself. Commands and runs need a paid plan too. Free keeps 7 days of history and up to 3 devices.
+- **Check `dropped` in the response.** `/ingest` answers `200` with `{ success, count, dropped?, source_id }`. `dropped` is the number of points discarded because the source was over its rate ceiling or the org is over its device limit. `/ingest` never answers `429`. Other statuses: `400` bad body, `401` bad key, `403` key lacks `write` or is limited to another device, `413` body over 5 MB, `502`/`503` retry.
 
 `POST /api/v1/write` also exists as a Prometheus/Alloy/OTel/Telegraf remote-write receiver. Do not reach for it unless the user already runs one of those.
 
@@ -86,6 +87,9 @@ Paths are `/v1/sources/...`. `/v1/devices/...` is a deprecated alias — bare `/
 - `GET /v1/sources/{id}/events?last=1h&limit=1000` → `[{ timestamp_ms, metric, value, tags }]`, the `class: "event"` points (also `tail`, `name`, `start`, `end`). Plexus has no separate log type. `/logs` is an old alias for the same route; use `/events`.
 - `GET /v1/fleet/health` → `{ sources_total, sources_online }`
 - `GET /v1/fleet/metrics?metric=X&last=1h` → `{ metric, interval, sources_online, sources_w_metric, sources: [...], truncated }`
+- `GET /v1/export?sources=a,b&start=...&end=...` → a CSV or Parquet file. `sources` is 1–50 slugs; `metrics` (optional) filters; `start`/`end` are ISO 8601 or epoch ms; `resolution` is `raw` (default), `1m` or `1h`; `format` is `csv` (default) or `parquet`; `estimate=1` returns a JSON row count instead of the file. At most 3 exports run at once per org.
+
+Every read endpoint answers `401` for a bad key and `402` when the org's access is switched off (billing).
 
 There is **no per-source health endpoint** — `/v1/sources/{id}/health` 404s. Liveness is already on the list: each entry carries `online` and `last_seen_ms`. Use `/v1/fleet/health` for the roll-up.
 
@@ -140,7 +144,7 @@ Frames you receive:
 - `{"type":"telemetry","points":[ {class, metric, value, timestamp, ...}, ... ]}` — **batched**, an array per frame, same point shape as ingest. Iterate `points`.
 - `{"type":"gateway_reconnecting","attempt":N,"delay_s":N}` — informational; the server is reconnecting upstream and will resume.
 
-Close codes: `4401` unauthorized (bad or missing key, or no auth message within 10s), `4402` payment required (org access disabled).
+Close codes on the metrics and events streams: `4401` unauthorized (bad or missing key, or no auth message within 10s), `4402` payment required (org access disabled). The video stream uses `4001` and `4002` for the same two cases, and `4008` when the stream times out.
 
 You do **not** need to answer application-level pings on this endpoint; keepalive is handled at the protocol layer.
 
@@ -170,7 +174,8 @@ should open one when a test starts and close it when the test ends, rather than
 expecting somebody to drag a time picker afterwards.
 
 These live on the **app** host (`https://app.plexus.company`), not the gateway,
-and take the same `x-api-key`.
+and take the same `x-api-key`. Runs need a paid plan: on Free, `POST /api/runs`
+answers `402` and plexus-python raises `PlexusError`.
 
 ```
 POST  /api/runs           {name, source_id, started_at, pass_criteria?, tags?}
@@ -207,14 +212,14 @@ let the pipeline settle first.
 
 - **Polling cadences for dashboards**: latest values 5s, charts 10s, fleet health 10s, source list 30s. Use SWR or TanStack Query with `refreshInterval`.
 - **Time ranges**: prefer `last=1h` (relative) over `start`/`end` (absolute) — easier to reason about and less timezone footgun. `start`/`end` are ISO date-times, not epoch ms.
-- **Batching ingest**: the gateway meters **messages, not points** — 2,000/s per WebSocket connection and per source (bursts up to 500), up to 10,000 points in one message. Buffer up to 64 points or 5 seconds, whichever first. One send per reading at bench rates exceeds the limit and the overflow is *discarded*, reported asynchronously as `RATE_LIMITED` after the send returned. In plexus-python use `px.batch(interval_ms=50)`; `px.send()` alone is one message per call. On 429 / 5xx, exponential backoff with max 3 attempts.
+- **Batching ingest**: the gateway meters **messages, not points** — 2,000/s per WebSocket connection and per source (bursts up to 500), up to 10,000 points in one message. Buffer up to 64 points or 5 seconds, whichever first. One send per reading at bench rates exceeds the limit and the overflow is *discarded*. Over the per-connection limit the WebSocket reports it asynchronously as `RATE_LIMITED` after the send returned; over the per-source ceiling the WebSocket says nothing, and HTTP `/ingest` answers `200` with a `dropped` count. In plexus-python use `px.batch(interval_ms=50)`; `px.send()` alone is one message per call. On 502 / 503, exponential backoff with max 3 attempts.
 - **Source IDs are slugs**: `drone-001`, `sat-alpha-3`, `bench.rig-2`. Must match `^[a-z0-9][a-z0-9._-]*$`, up to 256 characters — dots are legal and a single character is legal. A uuid-shaped slug is rejected: every resolver reads uuid-shaped refs as internal ids, so such a source would be unreachable. Stable, lowercase.
 - **Source IDs are not deduplicated.** The gateway writes whatever `source_id` you declare. Two devices declaring the same name merge into one source.
 - **Metric names are opaque and may be long.** Anything that round-trips a name must use the identical string on both sides or the series and its metadata will not join.
 
 ## Common pitfalls
 
-- **`points`, not `metrics`, on ingest.** The most common 400. Set `class` on every point too: HTTP infers it when missing, the WebSocket does not, and `class: "metric"` with a non-numeric value is a 400.
+- **`points`, not `metrics`, on ingest.** The most common 400. Set `class` on every point too: it is inferred when missing, and `class: "metric"` with a non-numeric value is a 400.
 - **Numeric timestamps only.** ISO strings 400. Milliseconds unless the value is under `1e12`, in which case it's read as seconds.
 - **The query response is columnar.** `series[m].avg[i]`, not `series[m][i].v`. Reaching for `.t`/`.v` yields `undefined` and an empty chart with no error.
 - **The live stream is on the data API, and auths by first message.** There is no `/v1/stream` on the gateway.
@@ -229,4 +234,4 @@ Fetch `https://api.plexus.company/openapi.json` for the authoritative HTTP schem
 This cheat sheet has drifted before. Corrected 2026-09-01 against the shipped
 gateway and app (runs API — which an earlier revision of API.md wrongly said did
 not exist; message-not-point metering and `px.batch()`; the real slug rule,
-which permits dots, single characters and 256 bytes). Corrected 2026-08-27 against Data API 0.1.0 (ingest array name, `sources`/`devices` paths, removed per-source health, columnar query) and again 2026-08-28 against gateway + API source (the live-stream host/path/auth/frame shape, the required `class` field, numeric-only timestamps, the redirect chain, and the now-fixed 1970 timestamp behavior). Corrected 2026-09-22: the read API host is `api.plexus.company`; `class` is inferred on HTTP `/ingest` (not a 400) but required on the WebSocket; key binding to one source; Free-plan WebSocket refusal; event size limits; no log upload.
+which permits dots, single characters and 256 bytes). Corrected 2026-08-27 against Data API 0.1.0 (ingest array name, `sources`/`devices` paths, removed per-source health, columnar query) and again 2026-08-28 against gateway + API source (the live-stream host/path/auth/frame shape, the required `class` field, numeric-only timestamps, the redirect chain, and the now-fixed 1970 timestamp behavior). Corrected 2026-09-22: the read API host is `api.plexus.company`; `class` is inferred on HTTP `/ingest` (not a 400) but required on the WebSocket; key binding to one source; Free-plan WebSocket refusal; event size limits; no log upload. Corrected 2026-10-02 against the gateway and API source: a missing `class` is inferred on the WebSocket as well as on HTTP; `/ingest` reports rate drops as a `dropped` count on a 200, never a 429; `/v1/export`; video-stream close codes; runs and commands need a paid plan.

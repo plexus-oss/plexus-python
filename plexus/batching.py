@@ -50,7 +50,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_INTERVAL_MS = 100.0
 
 # Hard floor on the flush interval. Below ~2ms the flush thread spends more
-# time waking up than sending, and 500 frames/s is the gateway's limit anyway.
+# time waking up than sending. 500 frames/s is a quarter of the gateway's
+# 2,000 messages/s ceiling, which is already more than batching needs.
 MIN_INTERVAL_MS = 2.0
 
 # Frames a periodic flush may send in one cycle. At the default interval and
@@ -77,8 +78,8 @@ class BatchSender:
         if interval_ms < MIN_INTERVAL_MS:
             raise ValueError(
                 f"interval_ms must be >= {MIN_INTERVAL_MS} "
-                f"({1000 / MIN_INTERVAL_MS:.0f} flushes/s is already past the "
-                "gateway's per-connection ceiling)"
+                f"({1000 / MIN_INTERVAL_MS:.0f} flushes/s; below that the flush "
+                "thread spends more time waking up than sending)"
             )
         if max_points < 1:
             raise ValueError("max_points must be >= 1")

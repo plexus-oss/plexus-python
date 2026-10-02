@@ -2,7 +2,7 @@
 
 Plexus is storage and dashboards for hardware teams: stream data from drones, robots and IoT devices into Plexus Time Series, or connect the database you already run, and get live dashboards and alerts. Website: [plexus.company](https://plexus.company). Docs: [docs.plexus.company](https://docs.plexus.company).
 
-**This is the thin Python SDK for Plexus.** Send telemetry to the Plexus gateway in one line. Storage, dashboards, alerts, and fleet management live in the platform — this package just ships your data.
+**This is the thin Python SDK for Plexus.** Send telemetry to the Plexus gateway in one line. Storage, dashboards, alerts, and fleet management live in Plexus — this package just ships your data.
 
 [![PyPI](https://img.shields.io/pypi/v/plexus-python)](https://pypi.org/project/plexus-python/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
@@ -92,11 +92,19 @@ with px.batch(interval_ms=50) as b:
 
 `b.send()` takes the same arguments as `px.send()`. A background thread flushes the queue every `interval_ms`, and leaving the block flushes what is left, so nothing is stranded. Readings keep the timestamp they were taken at, not the one they were flushed at.
 
-If the gateway does discard frames it reports `RATE_LIMITED`; the SDK counts those on `px.rate_limited_frames` and raises `RateLimitedError` on the next send rather than letting the loss pass unnoticed.
+What happens over the limit depends on which limit and which transport:
+
+- **WebSocket, over 2,000 messages/s on the connection:** the gateway discards the message and sends a `RATE_LIMITED` error frame. The SDK counts those on `px.rate_limited_frames` and raises `RateLimitedError` on a later send. The discarded points are gone.
+- **WebSocket, over the per-source ceiling** (2,000 messages/s, bursts up to 500): the gateway discards the message and sends nothing back. The SDK cannot see this loss.
+- **HTTP** (the fallback, and the only path on the Free plan): the gateway answers `200` with a `dropped` count in the body. The SDK does not read `dropped`, so `send()` returns `True` and nothing is raised.
+
+So `RateLimitedError` tells you about some drops, not all of them. Batch so you stay far under the ceiling.
 
 ### `run(name)` — mark a test run
 
 A run is a named window on a source. Runs are recalled on `/runs`, compared against each other aligned at T+0, and checked against their pass criteria when they close.
+
+Runs need a paid plan. On the Free plan `start_run()` (and so `px.run()`) raises `PlexusError` with a `402`.
 
 ```python
 with px.run("hotfire-03", pass_criteria=[
@@ -116,8 +124,6 @@ px.event("fault",        "E-stop triggered")
 px.event("state_change", {"from": "IDLE", "to": "RUNNING"})
 px.event("sensor_error", {"sensor": "imu", "code": 42}, tags={"motor": "A"})
 ```
-
-The platform displays events as markers overlaid on your telemetry charts, not as time-series lines.
 
 Limits per event: a string value up to 256 bytes, a dict or list value up to 4,096 bytes of JSON, and up to 16 tags. The gateway rejects anything larger.
 
@@ -198,7 +204,7 @@ See [`examples/`](examples/) for runnable versions of each.
 
 ## Reliability
 
-Every send buffers locally before hitting the network, retries with exponential backoff, and keeps your data safe across outages. The buffer is on disk (SQLite) by default, so it survives restarts and power loss. To keep it in memory only:
+A send goes straight to the gateway. If it fails, the points are saved to a local buffer, the error is raised, and the next send (or `px.flush_buffer()`) tries them again first. The HTTP path retries with exponential backoff (3 retries by default) before it gives up. The buffer is on disk (SQLite) by default, so it survives restarts and power loss. To keep it in memory only:
 
 ```python
 px = Plexus(persistent_buffer=False)
@@ -234,7 +240,7 @@ px.send("temperature", 72.5, timestamp=t)   # your timestamp, used as-is, no cor
 By default the SDK connects over a **WebSocket** to `/ws/device` on the gateway — the gateway's device wire protocol. This gives you:
 
 - lower-latency streaming of telemetry,
-- the channel that will carry actions triggered from a Plexus dashboard.
+- the channel that carries [commands](#commands) from Plexus to your device.
 
 If the socket is unavailable, sends transparently fall back to `POST /ingest` so no data is lost.
 
@@ -247,7 +253,7 @@ There is no transport selector: the SDK always prefers the WebSocket and falls b
 
 Either way, plain `px.send()` is one message per call; it does not batch. `px.send_batch()` sends one list as one message, and `px.batch()` groups a fast stream for you in the background.
 
-**On the Free plan** the gateway refuses the device WebSocket (`streaming_requires_plan`). The SDK falls back to HTTP by itself, so `send()`, `send_batch()`, `batch()` and `event()` all still work. Live streaming and video need a paid plan. Free also caps you at 3 devices and 7 days of history.
+**On the Free plan** the gateway refuses the device WebSocket (`streaming_requires_plan`). The SDK falls back to HTTP by itself, so `send()`, `send_batch()`, `batch()` and `event()` all still work. Live streaming, video, commands and runs need a paid plan. Free also caps you at 3 devices and 7 days of history.
 
 ### Commands
 
@@ -269,6 +275,10 @@ def power_off(run, outlet):
 px.serve()   # blocks until Ctrl+C / SIGTERM; or keep calling px.send(...)
 ```
 
+Commands need a paid plan. They travel over the device WebSocket, which the
+gateway refuses on the Free plan, so on Free a handler is never called and
+`px.serve()` just waits.
+
 Use an API key created with **Receive commands** on the Plexus API Keys page.
 Other keys keep sending telemetry, but their commands are ignored.
 
@@ -285,8 +295,10 @@ return value becomes the run's result; an exception makes the run `failed`.
 | `concurrency` | `accept` allows overlapping runs; `reject` refuses a second while one is going |
 
 The SDK acknowledges each run, never runs the same run id twice, judges expiry
-on a monotonic clock, and replays unacknowledged statuses after a reconnect. If
-your org stores command metadata only, no result or error text leaves the device.
+on a monotonic clock, and replays unacknowledged statuses after a reconnect.
+The return value and any error text are sent to Plexus with the run's status.
+For an org set to keep command metadata only, Plexus discards them on arrival
+instead of storing them.
 
 Run them from the **Commands** page or a dashboard panel in Plexus.
 
@@ -298,9 +310,26 @@ advertised in the auth frame.
 
 | Variable                | Description                  | Default                          |
 | ----------------------- | ---------------------------- | -------------------------------- |
-| `PLEXUS_API_KEY`        | API key (required)           | none                             |
+| `PLEXUS_API_KEY`        | API key. Not needed if `plexus init` saved one | none            |
 | `PLEXUS_GATEWAY_URL`    | HTTP ingest URL              | `https://gateway.plexus.company` |
 | `PLEXUS_GATEWAY_WS_URL` | WebSocket URL              | `wss://gateway.plexus.company`   |
+
+## CLI
+
+```bash
+plexus init                    # authorize this machine in a browser, save an API key
+plexus whoami                  # show the saved key and check it with the server
+plexus logout                  # forget the saved key
+plexus dashboards list         # dashboards as JSON files in your repo:
+plexus dashboards pull --all   #   download them to plexus/dashboards/
+plexus dashboards diff         #   show what push would change
+plexus dashboards push         #   upload local files
+plexus skills install          # copy the agent skills into ~/.claude/skills
+plexus --version
+```
+
+`plexus init` needs a browser on the same machine: it listens on `127.0.0.1`
+for the key. On a headless device, set `PLEXUS_API_KEY` instead.
 
 ## Agent skills
 
@@ -322,7 +351,7 @@ credentials. See [skills/README.md](skills/README.md).
 Your code ── px.send() ── WebSocket /ws/device (or HTTP POST /ingest) ──> plexus-gateway ──> ClickHouse + Dashboard
 ```
 
-One thin path. No agent, no daemon, no adapters. If you want the full HardwareOps platform — dashboards, alerts, RCA, fleet views — that's the web UI at app.plexus.company. This package gets your data there.
+One thin path. No daemon, no adapters. Dashboards, alerts and fleet views are in the web app at app.plexus.company. This package gets your data there.
 
 ## License
 

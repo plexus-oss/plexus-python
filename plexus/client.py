@@ -254,8 +254,12 @@ class Plexus:
         retry_config: Configuration for retry behavior. If None, uses defaults.
         max_buffer_size: Maximum number of points to buffer locally on failures. Default 10000.
 
+        persistent_buffer: Keep the failed-send buffer on disk (SQLite). Default True.
+        buffer_path: Path of the on-disk buffer. Defaults to ~/.plexus/buffer.db.
+        ws_url: Gateway WebSocket URL. Defaults to wss://gateway.plexus.company.
+
     Raises:
-        RuntimeError: If not logged in (no API key configured)
+        ValueError: If no API key is configured, or source_id is not a valid slug.
     """
 
     def __init__(
@@ -456,8 +460,12 @@ class Plexus:
             True if successful
 
         Raises:
-            AuthenticationError: If API key is missing or invalid (cloud mode only)
-            PlexusError: If the request fails
+            AuthenticationError: If the API key is missing, invalid, or lacks
+                the write scope
+            RateLimitedError: If the gateway reported dropping earlier frames
+                (WebSocket per-connection limit only)
+            PlexusError: If the request fails after retries. The points stay
+                in the local buffer and go out with the next send.
 
         Example:
             px.send("temperature", 72.5)
@@ -934,7 +942,7 @@ class Plexus:
         quality: int = 85,
         timestamp: float | None = None,
     ) -> bool:
-        """Send a single video frame to Plexus (WebSocket transport only).
+        """Send a single video frame to Plexus. Video goes over the WebSocket only.
 
         Args:
             frame: One of:
@@ -947,10 +955,11 @@ class Plexus:
             timestamp: Unix timestamp in seconds. If not provided, uses current time.
 
         Returns:
-            True if the frame was sent successfully.
+            True if the frame was queued for sending. False if the WebSocket
+            is not connected (for example on the Free plan, where the gateway
+            refuses it) or its video queue is full.
 
         Raises:
-            PlexusError: If transport is not 'ws'.
             ValueError: If frame type is not supported.
             ImportError: If a required optional dependency is missing.
         """
@@ -973,7 +982,7 @@ class Plexus:
         quality: int = 85,
         timestamp: float | None = None,
     ) -> bool:
-        """Send a thermal camera frame to Plexus (WebSocket transport only).
+        """Send a thermal camera frame to Plexus. Video goes over the WebSocket only.
 
         Args:
             temps: 2-D float32 numpy array of temperatures in Celsius,
@@ -986,7 +995,6 @@ class Plexus:
             True if the frame was sent successfully.
 
         Raises:
-            PlexusError: If transport is not 'ws'.
             ImportError: If opencv-python-headless is not installed.
         """
         try:
@@ -1015,7 +1023,7 @@ class Plexus:
         fps: int = 15,
         quality: int = 85,
     ) -> "threading.Event":
-        """Stream video from an RTSP URL or file path via FFmpeg (WebSocket only).
+        """Stream video from an RTSP URL or file path via FFmpeg. Video goes over the WebSocket only.
 
         Requires FFmpeg to be installed and available on $PATH.
 
@@ -1029,7 +1037,7 @@ class Plexus:
             A threading.Event. Call .set() on it to stop streaming.
 
         Raises:
-            PlexusError: If transport is not 'ws' or FFmpeg is not found.
+            PlexusError: If FFmpeg is not found.
 
         Example:
             stop = px.stream_camera("rtsp://192.168.1.100/stream", camera_id="front:0")
@@ -1219,7 +1227,7 @@ class Plexus:
         params: list[dict[str, Any]] | None = None,
         concurrency: str = "accept",
     ) -> None:
-        """Register a command handler (WebSocket transport only).
+        """Register a command handler. Commands arrive over the WebSocket only.
 
         .. deprecated::
             Use `@px.command(...)`, which declares titles, typed parameters,

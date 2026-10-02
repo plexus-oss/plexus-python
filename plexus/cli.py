@@ -5,7 +5,7 @@ Designed to feel like fly.io / vercel CLIs:
     $ pip install plexus-python
     $ plexus init
     Opening browser to https://app.plexus.company/auth/cli...
-    ✓ Saved API key as cli-<host>. You're set up.
+    ✓ Saved API key as cli-<host>.
 
 Implementation:
 - Spin up a local HTTP listener on a random free port.
@@ -636,7 +636,7 @@ def build_parser() -> argparse.ArgumentParser:
     logout = sub.add_parser("logout", help="Forget the local API key.")
     logout.set_defaults(func=cmd_logout)
 
-    whoami = sub.add_parser("whoami", help="Show the local credential summary.")
+    whoami = sub.add_parser("whoami", help="Show the local key and check it with the server.")
     whoami.add_argument(
         "--no-verify",
         action="store_true",
