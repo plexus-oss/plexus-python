@@ -13,6 +13,7 @@ Store-and-forward:
 
 import json
 import logging
+import hashlib
 import os
 import sqlite3
 import threading
@@ -113,6 +114,37 @@ class MemoryBuffer(BufferBackend):
             return batch, len(self._buffer)
 
 
+LEGACY_BUFFER_NAME = "buffer.db"
+
+
+def default_buffer_dir() -> str:
+    """`~/.plexus`, created private to the user."""
+    plexus_dir = os.path.join(os.path.expanduser("~"), ".plexus")
+    os.makedirs(plexus_dir, exist_ok=True)
+    try:
+        os.chmod(plexus_dir, 0o700)
+    except OSError:
+        pass  # Windows or restricted filesystem
+    return plexus_dir
+
+
+def buffer_path_for_source(source_id: str) -> str:
+    """The buffer file for one source: `~/.plexus/buffer-<source>.db`.
+
+    One file per source, because buffered points do not carry a source id: the
+    client that sends them supplies it. With a single shared file, a second
+    client on the same machine (another device bridged by the same script, or
+    another process) drained the first one's backlog and sent it under its own
+    source id, so readings landed on the wrong device.
+
+    A very long id is hashed to keep the file name within filesystem limits.
+    """
+    name = source_id
+    if len(name) > 100:
+        name = hashlib.sha256(source_id.encode("utf-8")).hexdigest()[:32]
+    return os.path.join(default_buffer_dir(), f"buffer-{name}.db")
+
+
 class SqliteBuffer(BufferBackend):
     """SQLite-backed persistent buffer using WAL mode. Thread-safe.
 
@@ -141,13 +173,7 @@ class SqliteBuffer(BufferBackend):
         self._lock = threading.Lock()
 
         if path is None:
-            plexus_dir = os.path.join(os.path.expanduser("~"), ".plexus")
-            os.makedirs(plexus_dir, exist_ok=True)
-            try:
-                os.chmod(plexus_dir, 0o700)
-            except OSError:
-                pass  # Windows or restricted filesystem
-            path = os.path.join(plexus_dir, "buffer.db")
+            path = os.path.join(default_buffer_dir(), LEGACY_BUFFER_NAME)
 
         self._path = path
         self._conn = sqlite3.connect(path, check_same_thread=False)

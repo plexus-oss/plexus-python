@@ -30,6 +30,7 @@ Note: Requires authentication. Run 'plexus init' or set PLEXUS_API_KEY.
 import gzip
 import json
 import logging
+import os
 import re
 import shutil
 import signal
@@ -46,7 +47,14 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Union
 
 from plexus._log import _say
-from plexus.buffer import BufferBackend, MemoryBuffer, SqliteBuffer
+from plexus.buffer import (
+    LEGACY_BUFFER_NAME,
+    BufferBackend,
+    MemoryBuffer,
+    SqliteBuffer,
+    buffer_path_for_source,
+    default_buffer_dir,
+)
 from plexus.commands import declare as declare_command
 from plexus.config import (
     RetryConfig,
@@ -296,12 +304,16 @@ class Plexus:
         self._serve_stop = threading.Event()  # set by serve()'s signal handlers
         self._clock_offset_ms: int = 0
 
-        # Pluggable buffer backend for failed sends
+        # Pluggable buffer backend for failed sends. Each source gets its own
+        # file unless the caller names one: see buffer_path_for_source().
         if persistent_buffer:
             self._buffer: BufferBackend = SqliteBuffer(
-                path=buffer_path, max_size=max_buffer_size,
+                path=buffer_path or buffer_path_for_source(self.source_id),
+                max_size=max_buffer_size,
                 on_overflow=self._on_buffer_overflow,
             )
+            if buffer_path is None:
+                self._adopt_legacy_buffer()
         else:
             self._buffer: BufferBackend = MemoryBuffer(
                 max_size=max_buffer_size,
@@ -320,6 +332,11 @@ class Plexus:
         self._server_error_lock = threading.Lock()
         self._rate_limited_frames = 0
         self._rate_limit_unreported = 0
+        # Points an HTTP /ingest call accepted the request for but did not
+        # store (it answers 200 with a `dropped` count). Reported like the
+        # WebSocket RATE_LIMITED notice: counted, then raised on the next send.
+        self._http_dropped_unreported = 0
+        self._http_dropped_total = 0
         self._announced_rate_limited = False
 
     @property
@@ -794,6 +811,33 @@ class Plexus:
         with self._server_error_lock:
             return self._rate_limited_frames
 
+    def _adopt_legacy_buffer(self) -> None:
+        """Move points left in the old shared `~/.plexus/buffer.db` into this
+        source's own file.
+
+        Releases before the per-source file kept every client's backlog in that
+        one file. On a machine with one device (the usual case) those points
+        are this source's, and dropping them on upgrade would lose data. With
+        several clients the first to start takes them, which is no worse than
+        before. Draining is transactional, so two processes starting at once
+        each move a point exactly once. Never fails construction.
+        """
+        legacy_path = os.path.join(default_buffer_dir(), LEGACY_BUFFER_NAME)
+        if not os.path.exists(legacy_path):
+            return
+        try:
+            legacy = SqliteBuffer(path=legacy_path, max_size=None)
+            try:
+                while True:
+                    batch, _remaining = legacy.drain(self._SEND_CHUNK_POINTS)
+                    if not batch:
+                        break
+                    self._buffer.add(batch)
+            finally:
+                legacy.close()
+        except Exception as e:  # noqa: BLE001 - a stale buffer must not stop a device
+            logger.warning("could not adopt the legacy buffer at %s: %s", legacy_path, e)
+
     def _raise_if_rate_limited(self) -> None:
         """Convert pending RATE_LIMITED notices into an exception, once each.
 
@@ -805,6 +849,15 @@ class Plexus:
         with self._server_error_lock:
             pending = self._rate_limit_unreported
             self._rate_limit_unreported = 0
+            dropped_points = self._http_dropped_unreported
+            self._http_dropped_unreported = 0
+        if dropped_points:
+            raise RateLimitedError(
+                f"Gateway accepted the request but dropped {dropped_points} point"
+                f"{'s' if dropped_points != 1 else ''} for a rate or device "
+                "limit; those points were lost. Send less often per device, "
+                "or check the plan's device limit."
+            )
         if pending:
             raise RateLimitedError(
                 f"Gateway dropped {pending} telemetry frame"
@@ -1410,8 +1463,11 @@ class Plexus:
                         continue
                     break
 
-                # Success
+                # Success. The gateway answers 200 even when it stored only
+                # part of the request (a rate or device limit), and says how
+                # many points it left out. Never let that pass unnoticed.
                 elif response.status_code < 400:
+                    self._note_http_dropped(response)
                     return
 
                 # Other 4xx errors - don't retry
@@ -1455,6 +1511,28 @@ class Plexus:
         elif self._announced_buffering:
             _say("✓ Sending again (drained the local buffer).")
             self._announced_buffering = False
+
+    def _note_http_dropped(self, response) -> None:
+        """Count points an /ingest response says it dropped."""
+        try:
+            body = json.loads(response.text or "{}")
+            dropped = int(body.get("dropped") or 0) if isinstance(body, dict) else 0
+        except (ValueError, TypeError):
+            return  # no JSON body, or not the shape we know: nothing reported
+        if dropped > 0:
+            with self._server_error_lock:
+                self._http_dropped_unreported += dropped
+                self._http_dropped_total += dropped
+
+    @property
+    def dropped_points(self) -> int:
+        """Points the gateway accepted a request for but did not store.
+
+        Non-zero means data loss over the HTTP path: the device is sending
+        faster than its limit, or the plan's device limit is reached.
+        """
+        with self._server_error_lock:
+            return self._http_dropped_total
 
     def _add_to_buffer(self, points: list[dict[str, Any]]) -> None:
         """Add points to the local buffer for later retry."""

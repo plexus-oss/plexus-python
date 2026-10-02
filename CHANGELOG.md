@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Readings could land on the wrong device.** Every client on a machine
+  shared one buffer file (`~/.plexus/buffer.db`), and buffered points do not
+  carry a source id. When a send failed, the next client to send, for any
+  device, picked up that backlog and sent it under its own source id. Each
+  source now has its own file, `~/.plexus/buffer-<source_id>.db`. Points left
+  in the old shared file are moved to the first client that starts, so nothing
+  is lost on upgrade. `buffer_path=` still works as before.
+- **Points dropped over HTTP were silent.** `POST /ingest` answers 200 with a
+  `dropped` count when a device is over its rate or the organisation is at its
+  device limit. The SDK never read it. It now counts those points
+  (`px.dropped_points`) and raises `RateLimitedError` on the next send, the
+  same way it reports drops on the WebSocket.
+
 ## [0.13.0] - 2026-09-30 - Dashboards as code
 
 ### Added

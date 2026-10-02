@@ -17,6 +17,10 @@ def test_defaults_are_not_reachable():
         assert "127.0.0.1" in resolved or "localhost" in resolved, resolved
 
 
+# Captured at import, before conftest points HOME at a tmp dir for each test.
+REAL_HOME = Path.home()
+
+
 def test_real_user_config_is_not_read(tmp_path):
     """A key in the developer's own ~/.plexus must never reach a test."""
     import plexus.config as config
@@ -24,7 +28,7 @@ def test_real_user_config_is_not_read(tmp_path):
 
     # Reads are redirected away from the real file...
     assert config.CONFIG_FILE.is_relative_to(tmp_path)
-    assert config.CONFIG_FILE != Path.home() / ".plexus" / "config.json"
+    assert config.CONFIG_FILE != REAL_HOME / ".plexus" / "config.json"
 
     # ...so no real credential or device identity can leak into a test.
     assert get_api_key() is None
@@ -36,3 +40,11 @@ def test_real_user_config_is_not_read(tmp_path):
     assert generated.startswith("source-")
     assert config.CONFIG_FILE.exists()
     assert config.CONFIG_FILE.is_relative_to(tmp_path)
+
+
+def test_buffer_files_stay_out_of_the_real_home(tmp_path):
+    """The persistent buffer lives under ~/.plexus; a test must never write there."""
+    from plexus.buffer import default_buffer_dir
+
+    assert Path(default_buffer_dir()).is_relative_to(tmp_path)
+    assert not Path(default_buffer_dir()).is_relative_to(REAL_HOME / ".plexus")
