@@ -64,7 +64,6 @@ KNOWN_DEAD = {
     "/v1/stream": "the live stream is on the data API, not the gateway",
     "/v1/devices": "deprecated alias; 307 -> /v1/devices/ -> 308 -> /v1/sources/",
     "/v1/devices/{}": "same deprecated alias, with a path",
-    "/v1/sources/{}/commands": "turned off 2026-09-21; returns 410 Gone and is hidden from the spec",
 }
 
 # Gateway routes, which live on a different host and so are not in the data

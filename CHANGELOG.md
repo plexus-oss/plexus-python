@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Docs
+- `POST /v1/sources/{id}/commands` is back on (2026-10-01) for keys with the
+  `write` scope. `API.md` and the Plexus skill no longer say it returns 410.
+  It reaches `px.on_command` handlers; `@px.command` declarations are still
+  run from the Commands page.
+
 ## [0.13.0] - 2026-09-30 - Dashboards as code
 
 ### Added
