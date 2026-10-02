@@ -1,6 +1,6 @@
 """Test isolation.
 
-Two things the suite did before this file existed:
+Three things the suite did before this file existed:
 
 1. It dialled the **production** gateway. `plexus/config.py` defaults to
    `wss://gateway.plexus.company`, and any test that builds a `Plexus(...)` and
@@ -13,7 +13,9 @@ Two things the suite did before this file existed:
    back to that file, so a developer with a working key could have had the suite
    authenticate as them and write test telemetry into a real org.
 
-Both are closed here, for every test, without opt-in.
+3. It wrote to the developer's own `~/.plexus` buffer files.
+
+All three are closed here, for every test, without opt-in.
 """
 
 import os
@@ -44,6 +46,19 @@ def isolate_plexus_config(tmp_path, monkeypatch):
     cfg_dir.mkdir()
     monkeypatch.setattr(config, "CONFIG_DIR", cfg_dir)
     monkeypatch.setattr(config, "CONFIG_FILE", cfg_dir / "config.json")
+    yield
+
+
+@pytest.fixture(autouse=True)
+def isolate_home(tmp_path, monkeypatch):
+    """Keep buffer files out of the developer's real home directory.
+
+    The persistent buffer lives under `~/.plexus`. Without this, every test
+    that built a client wrote test points into the real one, and a client
+    starting up would adopt whatever backlog a real device had left there.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     yield
 
 
