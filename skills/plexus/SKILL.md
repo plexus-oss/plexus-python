@@ -148,7 +148,9 @@ The gateway's own sockets (`/ws/device`, `/ws/browser`) are for the Python SDK a
 
 ### Control
 
-There is no API for sending commands to devices. `POST /v1/sources/{id}/commands` was turned off and returns `410 Gone`. Don't write code that calls it, and don't offer to trigger device behavior through the API.
+`POST /v1/sources/{id}/commands` with `{"command": "...", "params": {...}}` sends a command to a connected device. It returns `{"queued": true}` when the command reached the device, and `{"queued": false}` (still HTTP 200) when the device is offline, so always check `queued`. The key needs the `write` scope; a key limited to one device can only command that device (`403` otherwise).
+
+It reaches handlers registered with `px.on_command(name, handler)`. Commands declared with `@px.command(...)` are run from the Plexus Commands page or a dashboard panel, not through this endpoint.
 
 ## Standard scaffolding
 
