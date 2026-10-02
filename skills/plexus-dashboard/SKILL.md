@@ -8,6 +8,25 @@ tools: Read, Write, Edit, Bash, WebFetch
 
 Scaffolds a complete web dashboard against the Plexus read API. This skill is opinionated about the stack so the user gets a working dashboard fast — they can swap pieces out later.
 
+## First: is this the right tool?
+
+Plexus has its own dashboards, in the app at `app.plexus.company/dashboards`. To
+create or change those, do not scaffold anything. Keep them as JSON files in the
+repo with the `plexus` CLI (plexus-python >= 0.13.0):
+
+```bash
+plexus dashboards list           # what exists, and what you have locally
+plexus dashboards pull --all     # download to plexus/dashboards/<uid>.json
+plexus dashboards diff           # what push would change (exit 1 if anything)
+plexus dashboards push           # upload local files
+```
+
+That needs an API key with the `dashboards` scope; `plexus init` issues one.
+
+This skill is for the other case: the user wants a **separate web app of their
+own** that reads from the Plexus read API. If they just said "build me a
+dashboard", ask which one they mean.
+
 ## When to use this skill
 
 - The user is building a frontend / dashboard / ops UI on top of Plexus telemetry
@@ -190,7 +209,7 @@ Wire it alongside SWR: keep `useSWR` for initial load (UI hydrates with a value 
 
 ## What NOT to do
 
-- Don't add auth/login flows. Tier_1 users have a single API key; this is meant to be embedded in their own auth-protected app.
+- Don't add auth/login flows. The app authenticates to Plexus with one API key; this is meant to be embedded in the user's own auth-protected app.
 - Don't add a backend layer "for safety" unless the user asks or the app is public. Direct browser → data API is the intended pattern for prototypes.
 - Don't poll a per-source health endpoint. It doesn't exist.
 - Don't type the query response as an array. It is columnar, and `.map(p => p.v)` over it yields `undefined` with no error — an empty chart and no clue why.
@@ -201,4 +220,4 @@ Wire it alongside SWR: keep `useSWR` for initial load (UI hydrates with a value 
 
 `https://api.plexus.company/openapi.json` is the source of truth for HTTP. It does **not** list WebSocket routes — the generic `plexus` skill documents those.
 
-Corrected 2026-08-28: `/v1/devices` → `/v1/sources`, removed the non-existent per-source health endpoint, fixed the columnar query type, and replaced the live-stream section (the old `wss://gateway.plexus.company/v1/stream` 404s, and the "browsers can't authenticate" caveat no longer holds). Corrected 2026-09-22: the read API host is `api.plexus.company`.
+Corrected 2026-08-28: `/v1/devices` → `/v1/sources`, removed the non-existent per-source health endpoint, fixed the columnar query type, and replaced the live-stream section (the old `wss://gateway.plexus.company/v1/stream` 404s, and the "browsers can't authenticate" caveat no longer holds). Corrected 2026-09-22: the read API host is `api.plexus.company`. Corrected 2026-10-02: Plexus's own dashboards are managed with `plexus dashboards`; this skill is for a separate app.

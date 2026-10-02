@@ -33,7 +33,8 @@ For **dashboards / UI**, use `plexus-dashboard`.
 **On a test bench, open a run.** Software driving a test should name its window
 rather than leave someone to find it on a chart later: `POST /api/runs` when the
 test starts, `PATCH /api/runs/{id}` with `status` and `ended_at` when it ends
-(app host, same `x-api-key`), or `with px.run(...)` from plexus-python. Declared
+(app host, same `x-api-key`), or `with px.run(...)` from plexus-python. Runs need
+a paid plan (`402` on Free). Declared
 `pass_criteria` are evaluated against every sample in the window on close. See
 the `plexus` skill for the contract.
 
@@ -56,12 +57,18 @@ Response:
   { "success": true, "count": 2, "source_id": "drone-001" }
 ```
 
+`count` is the number of points queued. If the gateway discarded points, the
+response is still `200` and carries a `dropped` count:
+`{ "success": true, "count": 0, "dropped": 2, "source_id": "drone-001" }`.
+Check it. A non-zero `dropped` means the source was over its rate ceiling or
+the org is over its device limit (3 on Free).
+
 Three things the gateway will reject you for, and one to always set. Get these right or nothing lands:
 
 1. **The array is `points`.** `"metrics": [...]` returns `400 {"error":"'points' array is required"}`.
 2. **`timestamp` is a number, never a string.** An ISO-8601 string returns `points[i].timestamp must be a number`. Epoch **milliseconds**; a positive value below `1e12` is read as **seconds** and scaled for you, so either unit works as long as it's numeric.
 3. **`source_id` must match `^[a-z0-9][a-z0-9._-]*$` (max 256 chars)** and is not deduplicated — two devices declaring the same id merge into one source. This is what SD-card clones do when they all boot as `raspberrypi`.
-4. **Set `class` on every point**: `"metric"` for numbers, `"event"` for strings, bools, objects and arrays. HTTP `/ingest` infers it when missing (numbers → metric, anything else → event), but the WebSocket rejects a point without it, and `"class": "metric"` on a non-number is a 400. Set it explicitly.
+4. **Set `class` on every point**: `"metric"` for numbers, `"event"` for strings, bools, objects and arrays. The gateway infers it when missing (numbers → metric, anything else → event), but `"class": "metric"` on a non-number is a 400. Set it explicitly.
 
 Events are for faults, state changes and log lines. There is no log upload: send the lines that matter as `{"class":"event","metric":"log","value":{"level":"error","msg":"..."}}`. Limits: a string value up to 256 bytes, an object/array value up to 4,096 bytes of JSON, up to 16 tags.
 
@@ -87,9 +94,11 @@ decides whether you hit a limit:
 25 channels at 100 Hz sent one at a time is 2,500 messages/s — over the limit,
 and **the overflow is discarded**. Batched every 50 ms it is 20 messages/s.
 
-Over the limit the gateway drops the whole message and answers `RATE_LIMITED`,
-which arrives *after* the send returned. Those points cannot be recovered, so
-this is a batching problem, not a retry one.
+Over the limit the gateway drops the whole message, and those points cannot be
+recovered. Over HTTP it still answers `200`, with the loss in `dropped`; it
+never answers `429`. Over the WebSocket, the per-connection limit answers with a
+`RATE_LIMITED` error frame *after* the send returned, and the per-source ceiling
+drops without a reply. So this is a batching problem, not a retry one.
 
 Never POST one point at a time. Buffer until **64 points OR 5 seconds**, whichever
 first, then flush. Constants worth exposing:
@@ -101,7 +110,7 @@ first, then flush. Constants worth exposing:
 
 ### 2. Retry with backoff
 
-On 429 (rate limit) or 5xx (server), retry with exponential backoff:
+On 5xx (the gateway answers `502` or `503` when it cannot queue the batch), retry with exponential backoff:
 
 - Attempt 1: immediate
 - Attempt 2: +1s
@@ -167,7 +176,9 @@ def _flush_once():
             r = urequests.post(URL, json=body, headers={"x-api-key": API_KEY})
             try:
                 if 200 <= r.status_code < 300:
-                    return                       # {"success":true,"count":N,...}
+                    # {"success":true,"count":N,...}; a "dropped" key means the
+                    # gateway discarded points (rate ceiling or device limit).
+                    return
                 if r.status_code in (401, 403):
                     return                       # bad key, give up
                 if r.status_code == 400:
@@ -230,7 +241,7 @@ Ask the user which RTOS / framework before generating C — the boilerplate diff
 ## What NOT to do
 
 - **Don't** POST per-point. You'll burn battery, hit rate limits, and pay more.
-- **Don't** retry 4xx errors (except 429). They won't get better — and a 400 means your body shape is wrong, so print the response instead of retrying it.
+- **Don't** retry 4xx errors. They won't get better — and a 400 means your body shape is wrong, so print the response instead of retrying it.
 - **Don't** queue forever on disconnect — bound the buffer, drop oldest, log the loss.
 - **Don't** include unbounded labels in `tags`. They cardinality-explode the database. Keep tags to slow-changing strings (firmware version, region, hardware revision).
 - **Don't** send an ISO-8601 timestamp string. It is a hard 400. Numbers only.
@@ -261,3 +272,5 @@ The ingest contract above is the authority for the device side. For reading data
 Corrected 2026-08-28 against gateway source (`ingest.go`, `validate.go`): the array is `points` not `metrics`, `class` is required, timestamps must be numeric, and the response is `{success, count, source_id}`. Every template in the previous version of this file would have 400'd.
 
 Corrected 2026-09-22: `class` is inferred on HTTP `/ingest` when missing (it was documented as a 400) but is required on the WebSocket, so set it anyway; the read API host is `api.plexus.company`; `px.send()` is one message per call, not batched.
+
+Corrected 2026-10-02 against gateway source (`ingest.go`, `device.go`): the WebSocket infers a missing `class` too; over-limit HTTP requests answer `200` with a `dropped` count, never `429`; runs need a paid plan.

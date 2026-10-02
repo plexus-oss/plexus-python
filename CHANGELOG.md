@@ -18,10 +18,36 @@
   same way it reports drops on the WebSocket.
 
 ### Docs
+
 - `POST /v1/sources/{id}/commands` is back on (2026-10-01) for keys with the
   `write` scope. `API.md` and the Plexus skill no longer say it returns 410.
   It reaches `px.on_command` handlers; `@px.command` declarations are still
   run from the Commands page.
+
+Docs, skills and docstrings checked against the gateway, API and app code
+(2026-10-02). No behaviour changes.
+
+- **A missing `class` is inferred on the WebSocket too**, not only on HTTP.
+  `API.md` and the skills said the WebSocket rejects a point without it.
+- **Rate-limit drops are not always reported.** `RateLimitedError` covers the
+  WebSocket per-connection limit only. Over the per-source ceiling the
+  WebSocket drops without a reply, and HTTP `/ingest` answers `200` with a
+  `dropped` count that the SDK does not read. `/ingest` never answers `429`.
+  `API.md` now lists the status codes `/ingest` really returns.
+- **Runs and commands need a paid plan.** On Free, `px.run()` raises
+  `PlexusError` (402), and commands never arrive because the gateway refuses
+  the device WebSocket.
+- **`store_results` is not sent by the gateway.** Command results and error
+  text are always sent; for an org set to keep metadata only, Plexus discards
+  them on arrival. The docs said they never leave the device.
+- **`plexus dashboards` and `plexus skills`** are now in `README.md`,
+  `AGENTS.md` and the dashboard skill. `AGENTS.md` lists the real exit codes.
+- The README no longer says every send is buffered first: points are buffered
+  only when a send fails.
+- `scripts/setup.sh` says Python 3.10+ and no longer lists a Modbus recipe.
+- `Plexus()` raises `ValueError`, not `RuntimeError`, without an API key; the
+  docstring now says so.
+- The skills document `GET /v1/export` and the video stream's close codes.
 
 ## [0.13.0] - 2026-09-30 - Dashboards as code
 

@@ -6,11 +6,12 @@ Machine-readable interface for AI assistants and automation scripts.
 
 | Variable                | Description                                     | Default                          |
 | ----------------------- | ----------------------------------------------- | -------------------------------- |
-| `PLEXUS_API_KEY`        | API key for authentication (required)           | none                             |
+| `PLEXUS_API_KEY`        | API key. Overrides the key `plexus init` saved  | none                             |
 | `PLEXUS_GATEWAY_URL`    | Gateway HTTP ingest URL                         | `https://gateway.plexus.company` |
 | `PLEXUS_GATEWAY_WS_URL` | Gateway WebSocket URL                           | `wss://gateway.plexus.company`   |
-| `PLEXUS_ENDPOINT`       | Product app URL (runs, frame uploads, CLI auth) | `https://app.plexus.company`     |
+| `PLEXUS_ENDPOINT`       | Product app URL (runs, dashboards, CLI auth)    | `https://app.plexus.company`     |
 | `PLEXUS_QUIET`          | Set `1`/`true`/`yes` to silence `[plexus]` stderr status lines | unset (status lines on) |
+| `PLEXUS_DASHBOARDS_DIR` | Folder for `plexus dashboards` files            | `plexus/dashboards`              |
 
 ## CLI Commands
 
@@ -19,20 +20,37 @@ plexus init                            # Authorize this machine, save an API key
 plexus init --name my-key              # Label for the issued key (default: cli-<hostname>)
 plexus init --force                    # Overwrite an existing local key
 plexus logout                          # Forget the local API key
-plexus whoami                          # Show the local credential summary
+plexus whoami                          # Show the local key and check it with the server
+plexus whoami --no-verify              # Only print what is stored locally
+plexus dashboards list                 # List dashboards and which ones you have locally
+plexus dashboards pull [UID ...] [--all]            # Download dashboards as plexus/dashboards/<uid>.json
+plexus dashboards diff [PATH ...]                   # Show what push would change
+plexus dashboards push [PATH ...] [--dry-run] [--force]   # Upload local files
+plexus skills install [--project] [--dir DIR]       # Copy the agent skills into ~/.claude/skills
+plexus skills --list                   # List the bundled skills, write nothing
+plexus --version
 ```
 
 `plexus init` opens a browser to `app.plexus.company/auth/cli`, waits for the callback, and
 persists the issued key to `~/.plexus/config.json`. Alternatively, set `PLEXUS_API_KEY` (or pass
 `api_key=` to `Plexus()`) instead of running `init`; get a key at app.plexus.company/api.
+`init` needs a browser on the same machine (the callback goes to `127.0.0.1`), so on a headless
+device set `PLEXUS_API_KEY`. The key `init` issues has the `read`, `write` and `dashboards` scopes.
+`plexus dashboards` needs the `dashboards` scope.
 
 ## Exit Codes
 
-| Code  | Meaning                               |
-| ----- | ------------------------------------- |
-| `0`   | Clean shutdown                        |
-| `1`   | Configuration or authentication error |
-| `130` | Interrupted (SIGINT / Ctrl+C)         |
+| Command | Code | Meaning |
+| --- | --- | --- |
+| any | `0` | Success |
+| any | `2` | Unknown command or bad arguments |
+| `init` | `1` | A key is already saved (use `--force`) |
+| `init` | `2` | Timed out waiting for the browser |
+| `init` | `3` | Authorization failed |
+| `whoami` | `1` | No key saved, or the server rejected the key |
+| `skills` | `1` | No bundled skills found |
+| `dashboards diff`, `push --dry-run` | `1` | There are changes |
+| `dashboards *` | `2` | An error |
 
 ## Python SDK
 
@@ -56,6 +74,10 @@ with px.batch(interval_ms=50) as b:
 
 # Events (faults, state changes, log lines). No log upload, no logging.Handler.
 px.event("log", {"level": "error", "msg": "IMU read timed out"})
+
+# send(), send_batch() and event() block until the gateway answers, and raise
+# on failure: AuthenticationError, RateLimitedError, or PlexusError (the base
+# class). Failed points are kept in the local buffer and retried on the next send.
 
 # The on-disk (SQLite) buffer is on by default; this keeps it in memory only
 px = Plexus(api_key="plx_xxxxx", persistent_buffer=False)
@@ -86,7 +108,10 @@ px.serve()   # blocks until Ctrl+C / SIGTERM; px.stop_serving() unblocks it
 Handlers are called as `handler(run, **params)`; params are validated and
 coerced first. `px.on_command(...)` is deprecated and not advertised in the
 auth frame. A person runs commands from the Plexus Commands page or a dashboard
-panel; the device's key must be created with "Receive commands".
+panel; the device's key must be created with "Receive commands". Commands need
+a paid plan: on Free the gateway refuses the device WebSocket, so no command
+arrives. Runs (`px.run()`, `px.start_run()`) also need a paid plan and raise
+`PlexusError` (402) on Free.
 
 ## Key Conventions
 

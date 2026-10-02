@@ -24,8 +24,9 @@ Commands protocol v1 (`@px.command`) runs alongside that legacy pair:
 
     client → device_auth ... "protocol": 1, "commands": [{name, title, params,
               danger, idempotent, expires_in_s, concurrency}, ...]
-    server → {"type": "authenticated", ..., "protocol": 1, "store_results": bool,
-              "max_frame_bytes": int}
+    server → {"type": "authenticated", ..., "protocol": 1, "max_frame_bytes": int}
+              (`store_results: false` is honoured if present; the gateway does
+              not send it today, so results are always sent)
     server → {"type": "command_run", "run_id": ..., "command": ..., "params": {...},
               "ttl_ms": ..., "attempt": 1}
     client → {"type": "command_status", "run_id": ..., "seq": 1,
@@ -247,7 +248,8 @@ class WebSocketTransport:
 
     @property
     def store_results(self) -> bool:
-        """False when the org is metadata-only: no result payloads leave here."""
+        """False only if the gateway sent `store_results: false`. It does not
+        send that field today, so this is True and results are sent."""
         return self._store_results
 
     def start(self) -> None:

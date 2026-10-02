@@ -5,9 +5,9 @@ the same format — how to build against Plexus without guessing at the API.
 
 | Skill              | For                                                                       |
 | ------------------ | ------------------------------------------------------------------------- |
-| `plexus`           | The API itself: hosts, auth, every endpoint, the live stream, the pitfalls |
+| `plexus`           | The API itself: hosts, auth, the endpoints, the live stream, the pitfalls  |
 | `plexus-firmware`  | Device-side ingest — ESP32, Pi, Jetson, autopilots, OBCs                   |
-| `plexus-dashboard` | Scaffolding a web dashboard on the read API                               |
+| `plexus-dashboard` | Building your own web app on the read API (Plexus's own dashboards are managed with `plexus dashboards`) |
 
 They are plain Markdown with YAML frontmatter. No install, no server, no
 credentials — an agent reads them and writes correct code.
@@ -37,8 +37,8 @@ An agent that has not read these invents a plausible Plexus API and gets it
 wrong in ways that fail quietly. The three that cost the most real time:
 
 - The ingest array is **`points`**, not `metrics`. Getting this wrong is a
-  400 on every write. Every point should also carry a `class`: HTTP infers
-  it when missing, the WebSocket does not.
+  400 on every write. Every point should also carry a `class`: the gateway
+  infers it when missing, but an explicit one says what you meant.
 - `timestamp` must be a **number**. An ISO-8601 string is rejected outright.
 - The query response is **columnar** — `series[m].avg[i]`, not
   `series[m][i].v`. Guessing wrong yields `undefined` with no error: an empty

@@ -65,13 +65,14 @@ def test_ingest_array_is_points(skill: Path):
 
 @pytest.mark.parametrize("skill", SKILLS, ids=lambda p: p.parent.name)
 def test_ingest_points_declare_class(skill: Path):
-    """Every sample sets `class`. HTTP /ingest infers it when missing, but the
-    WebSocket rejects a point without it, so the skills always show it."""
+    """Every sample sets `class`. The gateway infers it when missing, on HTTP
+    and on the WebSocket, but an explicit class says what the sender meant, so
+    the skills always show it."""
     for body in ingest_bodies(skill.read_text()):
         if '"metric"' in body and '"value"' in body:
             assert '"class"' in body or "class" in body, (
-                "an ingest sample builds points without `class` — the "
-                "WebSocket validator requires 'metric' or 'event' on every point"
+                "an ingest sample builds points without `class` — the skills "
+                "always set 'metric' or 'event' explicitly on every point"
             )
 
 

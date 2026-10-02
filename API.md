@@ -14,19 +14,19 @@ Send telemetry data to Plexus using HTTP or WebSocket.
 The Python SDK picks for you: it tries the WebSocket and falls back to HTTP on
 its own. On the Free plan the gateway refuses the device WebSocket
 (`streaming_requires_plan`), so the SDK sends everything over HTTP and
-telemetry and events still land. Live streaming and video need a paid plan.
-Free also allows up to 3 devices and 7 days of history.
+telemetry and events still land. Live streaming, video, commands and runs need
+a paid plan. Free also allows up to 3 devices and 7 days of history.
 
 ## Quick Start
 
-### Option 1: Web-Controlled Device (Recommended)
+### Option 1: Setup script (Recommended)
 
-Set up your device with one command using an API key:
+Install the SDK and send a test reading with one command. It needs Python 3.10
+or newer on the device:
 
 ```bash
 # With an API key (get one at app.plexus.company/api)
-curl -sL https://app.plexus.company/setup | bash -s -- --key plx_your_api_key
-
+curl -sL https://app.plexus.company/setup | bash -s -- --key plx_your_api_key --name drone-01
 ```
 
 Then find the device at [app.plexus.company/devices](https://app.plexus.company/devices).
@@ -104,7 +104,7 @@ x-api-key: plx_xxxxx
 
 | Field        | Type   | Required | Description                                                                                                                                                                                             |
 | ------------ | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `class`      | string | WS only  | `"metric"` (numeric value) or `"event"` (anything else). Set it explicitly. Over HTTP a missing `class` is inferred from the value; over WebSocket it is required.                                        |
+| `class`      | string | No       | `"metric"` (numeric value) or `"event"` (anything else). Set it explicitly. A missing `class` is inferred from the value (numbers become metrics, everything else events), over HTTP and WebSocket alike. |
 | `metric`     | string | Yes      | Metric name (e.g., `temperature`, `motor.rpm`)                                                                                                                                                          |
 | `value`      | any    | Yes      | See supported value types below                                                                                                                                                                         |
 | `timestamp`  | float  | No       | Unix timestamp in seconds (or ms if ≥ 1e12). Omit to use device time. Over WebSocket, the Python SDK applies a server-synced clock correction when omitted — see [Clock correction](#clock-correction). |
@@ -148,6 +148,9 @@ A **run** is a named time window on a source — a hot-fire, a bench sequence, a
 flight. Runs are recalled on `/runs`, compared against each other aligned at
 T+0, and evaluated against declared pass criteria when they close.
 
+Runs need a paid plan. On the Free plan `POST /api/runs` answers `402`
+(`UPGRADE_REQUIRED`), which the Python SDK raises as `PlexusError`.
+
 The SDK opens and closes them, so the software driving the bench owns the
 window rather than someone remembering to drag a time-range picker afterwards:
 
@@ -187,10 +190,11 @@ To group data without a window, plain `tags` on each point still work.
 
 ## WebSocket API
 
-For real-time streaming and video, devices connect via WebSocket. This needs a
-paid plan: on Free, the gateway answers `device_auth` with an error frame
-(`"code": "streaming_requires_plan"`) and closes. Send over HTTP instead; the
-Python SDK does this for you.
+For real-time streaming, video and commands, devices connect via WebSocket.
+This needs a paid plan: on Free, the gateway answers `device_auth` with an error
+frame (`"code": "streaming_requires_plan"`) and closes. Send over HTTP instead;
+the Python SDK does this for you. Commands have no HTTP path, so on Free a
+device never receives one.
 
 Video frames go over this socket. They are relayed live to anyone watching and
 stored only when someone presses **Record** in the app, for up to 4 hours per
@@ -214,7 +218,7 @@ Devices authenticate using an API key. The gateway echoes the declared `source_i
   "api_key": "plx_xxxxx",
   "source_id": "drone-01",
   "platform": "python-sdk",
-  "agent_version": "0.8.0",
+  "agent_version": "0.13.0",
   "protocol": 1
 }
 
@@ -247,7 +251,7 @@ Devices authenticate using an API key. The gateway echoes the declared `source_i
 
 | Type                 | Description                                            |
 | -------------------- | ------------------------------------------------------ |
-| `authenticated`      | Auth accepted; carries `server_time_ms`, and for protocol v1 `store_results` and `max_frame_bytes` |
+| `authenticated`      | Auth accepted; carries `server_time_ms`, `protocol` and `max_frame_bytes` |
 | `command_run`        | Run a declared command (protocol v1)                   |
 | `command_status_ack` | The server has the statuses for this run up to `seq`   |
 | `typed_command`      | Invoke a command the device registered via `on_command` |
@@ -281,7 +285,7 @@ A client declares its commands in the auth frame and answers each run with
 // Device → Server: the declaration rides the auth frame
 {
   "type": "device_auth", "api_key": "plx_xxxxx", "source_id": "pod-07",
-  "platform": "python-sdk", "agent_version": "0.11.6", "protocol": 1,
+  "platform": "python-sdk", "agent_version": "0.13.0", "protocol": 1,
   "commands": [{
     "name": "power_off", "title": "Power off",
     "danger": "critical", "idempotent": true,
@@ -294,7 +298,7 @@ A client declares its commands in the auth frame and answers each run with
 
 // Server → Device
 { "type": "authenticated", "source_id": "pod-07", "server_time_ms": 1746100800000,
-  "protocol": 1, "store_results": true, "max_frame_bytes": 65536 }
+  "protocol": 1, "max_frame_bytes": 1048576 }
 
 // Server → Device: ttl_ms is what REMAINS at send, not a deadline
 { "type": "command_run", "run_id": "0f0c…", "command": "power_off",
@@ -331,7 +335,7 @@ Rules:
 - Acknowledge before running. Never run one `run_id` twice (the Python SDK remembers 256).
 - Measure `ttl_ms` on a monotonic clock from the moment the frame arrives.
 - Hold every status until it is acked; after a reconnect send `command_sync`, then replay.
-- When `store_results` is `false`, send the state and `error_code` only: no `result`, `error_message` or progress `message`.
+- The gateway does not send `store_results` today, so clients send `result`, `error_message` and progress `message` with their statuses. For an org set to keep command metadata only, Plexus discards those fields on arrival instead of storing them. The Python SDK would withhold them if an `authenticated` frame carried `store_results: false`.
 - A `command_status` frame is at most 64 KB; drop the `result` rather than the status.
 - `params` is a flat map, name → spec (not a JSON Schema `object` wrapper). `type` is
   `string` (`maxLength`, `enum` of 1–64 strings), `integer`/`number` (`minimum`,
@@ -359,7 +363,7 @@ in, `command_result` frames out. Legacy handlers are not advertised in
 { "type": "command_result", "id": "cmd-1", "command": "reboot", "event": "result", "result": { "ok": true } }
 ```
 
-> **Removed / not built.** There are no raw `start_stream`, `stop_stream`, `start_session`, `stop_session`, `configure`, `session_started`, or `session_stopped` frames — the earlier agent-style streaming/recording protocol was removed. Dashboard-driven control now flows through the `typed_command` envelope above.
+> **Removed / not built.** There are no raw `start_stream`, `stop_stream`, `start_session`, `stop_session`, `configure`, `session_started`, or `session_stopped` frames — the earlier agent-style streaming/recording protocol was removed. Commands run from the Commands page or a dashboard panel use `command_run` (protocol v1, above). The `typed_command` envelope is the legacy path.
 
 ## Code Examples
 
@@ -525,14 +529,23 @@ while True:
 
 ## Errors
 
+`POST /ingest` on the gateway answers with:
+
 | Status | Meaning                         |
 | ------ | ------------------------------- |
-| 200    | Success                         |
-| 400    | Bad request (check JSON format) |
+| 200    | Accepted. Check `dropped` in the body: points the gateway discarded because the source was over its rate ceiling or the org is over its device limit |
+| 400    | Bad request: invalid JSON, no `points` array, more than 10,000 points, or a point that fails validation |
 | 401    | Invalid or missing API key      |
-| 403    | API key lacks permissions, or is limited to another device |
-| 404    | Resource not found              |
-| 410    | Resource expired                |
+| 403    | API key lacks the `write` scope, or is limited to another device |
+| 413    | Body larger than 5 MB           |
+| 500    | Gateway error                   |
+| 502    | Could not queue the telemetry; retry |
+| 503    | Gateway degraded; retry         |
+
+`/ingest` does not answer `429`. The body of an error is `{"error": "..."}`.
+
+The app API (`/api/runs`) also answers `402` when the plan does not include
+the feature, and `404` for an unknown run or source.
 
 ## Rate limits and batching
 
@@ -544,19 +557,33 @@ message, whatever it carries. `send()` does not batch:
 | Telemetry messages per WS connection | 2,000/s          |
 | Hard ceiling per source (WS + HTTP) | 2,000 messages/s, bursts up to 500 |
 | Points per message                 | 10,000           |
-| Message size                       | 1 MB             |
+| Message size                       | 1 MB (WebSocket), 5 MB (HTTP body) |
 
 Because the ceiling counts messages, the shape of your sends decides whether
 you hit it. 25 channels at 100 Hz sent one at a time is 2,500 messages/s —
 over the limit. The same 2,500 readings/s batched every 100 ms is 10 messages/s,
 and the batches are also several times cheaper to store.
 
-**Over the limit, the gateway discards the whole message.** It replies with a
-`RATE_LIMITED` error frame, but that arrives after `send()` has already
-returned — those points are gone and cannot be resent. The SDK counts the
-notices (`px.rate_limited_frames`) and raises `RateLimitedError` on the next
-send so the loss cannot pass unnoticed, but the only real fix is to send
-fewer, larger messages.
+**Over the limit, the gateway discards the whole message.** Those points are
+gone and cannot be resent. How you find out depends on the limit and the path:
+
+- **WebSocket, per-connection limit.** The gateway replies with a
+  `RATE_LIMITED` error frame, which arrives after `send()` has already
+  returned. The SDK counts the notices (`px.rate_limited_frames`) and raises
+  `RateLimitedError` on a later send.
+- **WebSocket, per-source ceiling.** The gateway discards the message and sends
+  nothing back. Neither the SDK nor your code is told.
+- **HTTP `/ingest`** (the SDK's fallback, and its only path on the Free plan).
+  The gateway answers `200` with a `dropped` count:
+  `{"success": true, "count": 0, "dropped": 25, "source_id": "rig-01"}`. A
+  client you write yourself should check `dropped`. The Python SDK does not
+  read it, so `send()` returns `True`.
+
+The same `dropped` count (or silent discard, on the WebSocket) applies to a
+device beyond the plan's device limit.
+
+`RateLimitedError` therefore reports some drops, not all. The only real fix is
+to send fewer, larger messages.
 
 Use `px.batch()` for anything above a few readings per second:
 

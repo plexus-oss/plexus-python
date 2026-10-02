@@ -1,5 +1,5 @@
 """
-Configuration management for Plexus Agent.
+Configuration management for the Plexus SDK.
 
 Config is stored in ~/.plexus/config.json
 """

@@ -177,7 +177,7 @@ else
         brew install python3
     else
         error "Could not install Python automatically"
-        hint "  Install Python 3.8+ manually, then re-run this script"
+        hint "  Install Python 3.10+ manually, then re-run this script"
         echo ""
         exit 1
     fi
@@ -442,7 +442,7 @@ info "  px = Plexus()                 # reads ~/.plexus/config.json"
 info "  px.send(\"temperature\", 21.5)"
 info "  EOF"
 echo ""
-dim "Recipes for MAVLink, CAN, MQTT, Modbus and I2C:"
+dim "Recipes for MAVLink, CAN, MQTT and I2C:"
 hint "  https://github.com/plexus-oss/plexus-python/tree/main/examples"
 echo ""
 dim "To run it on boot, point a systemd unit at your own script —"
@@ -455,7 +455,7 @@ echo ""
 dim "What was installed:"
 info "  Virtual env:  $VENV_DIR"
 info "  Config:       $HOME/.plexus/config.json"
-info "  CLI:          $PLEXUS_BIN_DIR/plexus  (init, login, logout, whoami)"
+info "  CLI:          $PLEXUS_BIN_DIR/plexus  (init, whoami, logout, dashboards, skills)"
 echo ""
 dim "To uninstall:"
 info "  rm -rf $VENV_DIR $PLEXUS_BIN_DIR $HOME/.plexus"
