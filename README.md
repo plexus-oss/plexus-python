@@ -96,7 +96,7 @@ What happens over the limit depends on which limit and which transport:
 
 - **WebSocket, over 2,000 messages/s on the connection:** the gateway discards the message and sends a `RATE_LIMITED` error frame. The SDK counts those on `px.rate_limited_frames` and raises `RateLimitedError` on a later send. The discarded points are gone.
 - **WebSocket, over the per-source ceiling** (2,000 messages/s, bursts up to 500): the gateway discards the message and sends nothing back. The SDK cannot see this loss.
-- **HTTP** (the fallback, and the only path on the Free plan): the gateway answers `200` with a `dropped` count in the body. The SDK does not read `dropped`, so `send()` returns `True` and nothing is raised.
+- **HTTP** (the fallback, and the only path on the Free plan): the gateway answers `200` with a `dropped` count in the body. Since 0.14.0 the SDK counts those points (`px.dropped_points`) and the next send raises `RateLimitedError`, the same as on the WebSocket. Before 0.14.0 they were lost without a sign.
 
 So `RateLimitedError` tells you about some drops, not all of them. Batch so you stay far under the ceiling.
 

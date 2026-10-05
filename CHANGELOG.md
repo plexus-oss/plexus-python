@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-05 - Two data-loss fixes
+
+Upgrade if more than one device sends from the same machine, or if you send
+over HTTP (every Free workspace does). One behaviour change: a send can now
+raise `RateLimitedError` where it used to succeed silently, because the
+gateway dropped points. Wrap sends as the README shows.
+
 ### Fixed
 
 - **Readings could land on the wrong device.** Every client on a machine

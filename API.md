@@ -576,8 +576,9 @@ gone and cannot be resent. How you find out depends on the limit and the path:
 - **HTTP `/ingest`** (the SDK's fallback, and its only path on the Free plan).
   The gateway answers `200` with a `dropped` count:
   `{"success": true, "count": 0, "dropped": 25, "source_id": "rig-01"}`. A
-  client you write yourself should check `dropped`. The Python SDK does not
-  read it, so `send()` returns `True`.
+  client you write yourself should check `dropped`. Since 0.14.0 the Python
+  SDK counts those points (`px.dropped_points`) and the next send raises
+  `RateLimitedError`.
 
 The same `dropped` count (or silent discard, on the WebSocket) applies to a
 device beyond the plan's device limit.
