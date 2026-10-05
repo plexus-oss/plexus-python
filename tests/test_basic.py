@@ -104,12 +104,13 @@ def test_send_batch_per_point_timestamps():
     assert data_points[2]["timestamp"] == int(t_shared * 1000)
 
 
-def test_error_message_uses_plexus_init():
-    """AuthenticationError for missing API key must reference 'plexus init', not 'plexus start'."""
+def test_missing_key_error_says_how_to_set_one():
+    """The missing-key error must name PLEXUS_API_KEY, not a CLI command that no longer exists."""
     import pytest
 
     from plexus.client import AuthenticationError
     px = Plexus(api_key="test_key", endpoint="http://localhost", persistent_buffer=False)
     px.api_key = ""
-    with pytest.raises(AuthenticationError, match="plexus init"):
+    with pytest.raises(AuthenticationError, match="PLEXUS_API_KEY") as exc:
         px._send_points([{"metric": "x", "value": 1, "timestamp": 0, "class": "metric"}])
+    assert "plexus init" not in str(exc.value)

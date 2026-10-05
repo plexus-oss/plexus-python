@@ -226,7 +226,6 @@ fi
 
 # Use a virtual environment to avoid PEP 668 issues on modern Python/Debian
 VENV_DIR="/opt/plexus/venv"
-PLEXUS_BIN_DIR="/opt/plexus/bin"
 
 if [ "$OS" = "Linux" ]; then
     if [ "$EUID" -eq 0 ]; then
@@ -237,12 +236,10 @@ if [ "$OS" = "Linux" ]; then
     else
         # Fall back to user directory if no sudo
         VENV_DIR="$HOME/.plexus/venv"
-        PLEXUS_BIN_DIR="$HOME/.plexus/bin"
         mkdir -p "$HOME/.plexus"
     fi
 else
     VENV_DIR="$HOME/.plexus/venv"
-    PLEXUS_BIN_DIR="$HOME/.plexus/bin"
     mkdir -p "$HOME/.plexus"
 fi
 
@@ -294,31 +291,6 @@ if run_with_spinner "Installing plexus-python..." "$VENV_PIP" install --upgrade 
 else
     error "Installation failed"
     exit 1
-fi
-
-# Make 'plexus' command available system-wide
-VENV_PLEXUS="$VENV_DIR/bin/plexus"
-if [ -f "$VENV_PLEXUS" ]; then
-    mkdir -p "$PLEXUS_BIN_DIR"
-    ln -sf "$VENV_PLEXUS" "$PLEXUS_BIN_DIR/plexus"
-
-    if [ "$OS" = "Linux" ]; then
-        # Add to PATH via bashrc
-        PROFILE_FILE="$HOME/.bashrc"
-        if ! grep -q "$PLEXUS_BIN_DIR" "$PROFILE_FILE" 2>/dev/null; then
-            echo "" >> "$PROFILE_FILE"
-            echo "# Plexus" >> "$PROFILE_FILE"
-            echo "export PATH=\"$PLEXUS_BIN_DIR:\$PATH\"" >> "$PROFILE_FILE"
-        fi
-        export PATH="$PLEXUS_BIN_DIR:$PATH"
-
-        # Also symlink to /usr/local/bin if possible
-        if [ "$EUID" -eq 0 ]; then
-            ln -sf "$VENV_PLEXUS" /usr/local/bin/plexus
-        elif sudo -n true 2>/dev/null; then
-            sudo ln -sf "$VENV_PLEXUS" /usr/local/bin/plexus
-        fi
-    fi
 fi
 
 echo ""
@@ -376,11 +348,11 @@ if [ -n "$API_KEY" ]; then
 else
     warn "No API key provided"
     echo ""
-    dim "To connect this device, authorize it in a browser:"
+    dim "Create a key at https://app.plexus.company/api, then re-run:"
     echo ""
-    hint "  $PLEXUS_BIN_DIR/plexus init"
+    hint "  curl -sL https://app.plexus.company/setup | bash -s -- --key plx_xxx --name my-device-01"
     echo ""
-    dim "Or re-run this installer with --key plx_xxx --name my-device-01"
+    dim "Or set PLEXUS_API_KEY in the environment your script runs in."
     echo ""
 fi
 
@@ -455,8 +427,7 @@ echo ""
 dim "What was installed:"
 info "  Virtual env:  $VENV_DIR"
 info "  Config:       $HOME/.plexus/config.json"
-info "  CLI:          $PLEXUS_BIN_DIR/plexus  (init, whoami, logout, dashboards, skills)"
 echo ""
 dim "To uninstall:"
-info "  rm -rf $VENV_DIR $PLEXUS_BIN_DIR $HOME/.plexus"
+info "  rm -rf $VENV_DIR $HOME/.plexus"
 echo ""

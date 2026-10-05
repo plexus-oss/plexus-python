@@ -6,51 +6,23 @@ Machine-readable interface for AI assistants and automation scripts.
 
 | Variable                | Description                                     | Default                          |
 | ----------------------- | ----------------------------------------------- | -------------------------------- |
-| `PLEXUS_API_KEY`        | API key. Overrides the key `plexus init` saved  | none                             |
+| `PLEXUS_API_KEY`        | API key. Overrides `api_key` in `~/.plexus/config.json` | none                     |
 | `PLEXUS_GATEWAY_URL`    | Gateway HTTP ingest URL                         | `https://gateway.plexus.company` |
 | `PLEXUS_GATEWAY_WS_URL` | Gateway WebSocket URL                           | `wss://gateway.plexus.company`   |
-| `PLEXUS_ENDPOINT`       | Product app URL (runs, dashboards, CLI auth)    | `https://app.plexus.company`     |
+| `PLEXUS_ENDPOINT`       | Product app URL (runs)                          | `https://app.plexus.company`     |
 | `PLEXUS_QUIET`          | Set `1`/`true`/`yes` to silence `[plexus]` stderr status lines | unset (status lines on) |
-| `PLEXUS_DASHBOARDS_DIR` | Folder for `plexus dashboards` files            | `plexus/dashboards`              |
 
-## CLI Commands
+## Setup
 
-```bash
-plexus init                            # Authorize this machine, save an API key locally (alias: login)
-plexus init --name my-key              # Label for the issued key (default: cli-<hostname>)
-plexus init --force                    # Overwrite an existing local key
-plexus logout                          # Forget the local API key
-plexus whoami                          # Show the local key and check it with the server
-plexus whoami --no-verify              # Only print what is stored locally
-plexus dashboards list                 # List dashboards and which ones you have locally
-plexus dashboards pull [UID ...] [--all]            # Download dashboards as plexus/dashboards/<uid>.json
-plexus dashboards diff [PATH ...]                   # Show what push would change
-plexus dashboards push [PATH ...] [--dry-run] [--force]   # Upload local files
-plexus skills install [--project] [--dir DIR]       # Copy the agent skills into ~/.claude/skills
-plexus skills --list                   # List the bundled skills, write nothing
-plexus --version
-```
+There is no CLI. Since 0.15.0 the package is a library only.
 
-`plexus init` opens a browser to `app.plexus.company/auth/cli`, waits for the callback, and
-persists the issued key to `~/.plexus/config.json`. Alternatively, set `PLEXUS_API_KEY` (or pass
-`api_key=` to `Plexus()`) instead of running `init`; get a key at app.plexus.company/api.
-`init` needs a browser on the same machine (the callback goes to `127.0.0.1`), so on a headless
-device set `PLEXUS_API_KEY`. The key `init` issues has the `read`, `write` and `dashboards` scopes.
-`plexus dashboards` needs the `dashboards` scope.
-
-## Exit Codes
-
-| Command | Code | Meaning |
-| --- | --- | --- |
-| any | `0` | Success |
-| any | `2` | Unknown command or bad arguments |
-| `init` | `1` | A key is already saved (use `--force`) |
-| `init` | `2` | Timed out waiting for the browser |
-| `init` | `3` | Authorization failed |
-| `whoami` | `1` | No key saved, or the server rejected the key |
-| `skills` | `1` | No bundled skills found |
-| `dashboards diff`, `push --dry-run` | `1` | There are changes |
-| `dashboards *` | `2` | An error |
+- With a coding agent: add the Plexus MCP server, then say "set up Plexus".
+  `claude mcp add --transport http plexus https://app.plexus.company/mcp`
+  The person approves a browser sign-in once. The MCP server creates a
+  send-only key, sends one reading and returns the dashboard link. Dashboards
+  are changed through the same MCP server or in the app.
+- On a device with no agent: `pip install plexus-python`, set `PLEXUS_API_KEY`
+  (create a key at https://app.plexus.company/api), then use the SDK below.
 
 ## Python SDK
 
@@ -115,7 +87,7 @@ arrives. Runs (`px.run()`, `px.start_run()`) also need a paid plan and raise
 
 ## Key Conventions
 
-- Config lives in `~/.plexus/config.json`
+- The SDK reads `api_key` and `source_id` from `~/.plexus/config.json` if the file exists; `PLEXUS_API_KEY` wins
 - API keys are prefixed with `plx_`
 - Source IDs (device slugs) namespace metrics
 - HTTP ingest → `POST /ingest` on gateway; WebSocket → `/ws/device` for streaming (paid plans; the SDK falls back to HTTP on Free)

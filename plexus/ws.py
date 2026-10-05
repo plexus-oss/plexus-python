@@ -352,7 +352,7 @@ class WebSocketTransport:
                 if first_attempt:
                     if "auth failed" in msg.lower() or "invalid api key" in msg.lower():
                         _say(f"✗ Auth rejected by gateway: {msg}")
-                        _say("  Check your key — `plexus whoami` shows what's on disk.")
+                        _say("  Check the key is active at https://app.plexus.company/api.")
                     else:
                         _say(f"✗ Connection failed: {msg}")
                         _say("  SDK will keep retrying with backoff.")

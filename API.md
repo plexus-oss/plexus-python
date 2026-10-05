@@ -19,19 +19,32 @@ a paid plan. Free also allows up to 3 devices and 7 days of history.
 
 ## Quick Start
 
-### Option 1: Setup script (Recommended)
+### Option 1: Your coding agent
 
-Install the SDK and send a test reading with one command. It needs Python 3.10
-or newer on the device:
+Add the Plexus MCP server to Claude Code, Cursor or Codex. In Claude Code:
 
 ```bash
-# With an API key (get one at app.plexus.company/api)
-curl -sL https://app.plexus.company/setup | bash -s -- --key plx_your_api_key --name drone-01
+claude mcp add --transport http plexus https://app.plexus.company/mcp
 ```
 
-Then find the device at [app.plexus.company/devices](https://app.plexus.company/devices).
+Then tell the agent "set up Plexus" and approve the browser sign-in once. It
+creates a send-only key, sends one reading and gives you the dashboard link.
 
-### Option 2: Direct HTTP
+### Option 2: Python SDK
+
+```bash
+pip install plexus-python
+export PLEXUS_API_KEY=plx_your_api_key   # create one at app.plexus.company/api
+```
+
+```python
+from plexus import Plexus
+
+px = Plexus(source_id="drone-01")
+px.send("temperature", 72.5)
+```
+
+### Option 3: Direct HTTP
 
 Send data directly via HTTP:
 
@@ -59,14 +72,6 @@ Plexus uses API keys for all authentication:
 | API Key | `plx_` | HTTP access and WebSocket device connections |
 
 ### Getting an API Key
-
-**Option A: CLI setup (recommended for devices)**
-
-1. Run `plexus init` on your device
-2. Authorize the machine in the browser tab it opens
-3. API key is saved to `~/.plexus/config.json`
-
-**Option B: Manual creation**
 
 1. Sign up at [app.plexus.company](https://app.plexus.company)
 2. Go to [app.plexus.company/api](https://app.plexus.company/api)
