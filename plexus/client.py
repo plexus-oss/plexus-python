@@ -24,7 +24,8 @@ Usage:
         ("pressure", 1013.25),
     ])
 
-Note: Requires authentication. Run 'plexus init' or set PLEXUS_API_KEY.
+Note: Requires an API key. Pass api_key= or set PLEXUS_API_KEY
+(create a key at https://app.plexus.company/api).
 """
 
 import gzip
@@ -1340,7 +1341,8 @@ class Plexus:
         """
         if not self.api_key:
             raise AuthenticationError(
-                "No API key configured. Run 'plexus init' or set PLEXUS_API_KEY"
+                "No API key configured. Set PLEXUS_API_KEY or pass api_key= "
+                "(create a key at https://app.plexus.company/api)"
             )
 
         ws = self._ensure_ws()
@@ -1441,7 +1443,7 @@ class Plexus:
                 # Auth errors - don't retry, raise immediately
                 if response.status_code == 401:
                     _say("✗ Gateway rejected the API key (401).")
-                    _say("  Run `plexus whoami` to confirm what's on disk.")
+                    _say("  Check the key is active at https://app.plexus.company/api.")
                     raise AuthenticationError("Invalid API key")
                 elif response.status_code == 403:
                     _say("✗ API key lacks write scope (403).")

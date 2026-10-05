@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-05 - One way to set up
+
+There is now one way to set up Plexus: the Plexus MCP server, used from a
+coding agent (Claude Code, Cursor, Codex).
+
+```bash
+claude mcp add --transport http plexus https://app.plexus.company/mcp
+```
+
+Then tell the agent "set up Plexus" and approve the browser sign-in once. It
+creates a send-only key, sends one reading and gives you the dashboard link.
+
+On a device with no agent, nothing changes: `pip install plexus-python`, set
+`PLEXUS_API_KEY`, and call `Plexus().send(...)`.
+
+This package is now a library only. Sending data, runs, commands, video and
+buffering are unchanged.
+
+### Removed
+
+- **The `plexus` command.** `pip install plexus-python` no longer puts a
+  `plexus` program on your path.
+  - `plexus init`: set up through the MCP server, or create a key on the API
+    Keys page (https://app.plexus.company/api) and set `PLEXUS_API_KEY`.
+  - `plexus whoami`: check the key on the API Keys page. A rejected key still
+    raises `AuthenticationError` on the first send.
+  - `plexus logout`: unset `PLEXUS_API_KEY`, or delete `~/.plexus/config.json`.
+  - `plexus --version`: `python -c "import plexus; print(plexus.__version__)"`.
+- **`plexus dashboards list / pull / diff / push`.** Change dashboards in the
+  app, or ask your agent to through the MCP server. `PLEXUS_DASHBOARDS_DIR` is
+  no longer read.
+- **The agent skills** (`plexus`, `plexus-dashboard`, `plexus-firmware`) and
+  `plexus skills install`. The MCP server replaces them. Copies already in
+  `~/.claude/skills` are not touched; delete them yourself.
+
+### Unchanged
+
+- A key saved in `~/.plexus/config.json` by an older version is still read
+  when `PLEXUS_API_KEY` is not set. Nothing deletes that file.
+
 ## [0.14.0] - 2026-10-05 - Two data-loss fixes
 
 Upgrade if more than one device sends from the same machine, or if you send

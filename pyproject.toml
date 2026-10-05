@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "plexus-python"
-version = "0.14.0"
+version = "0.15.0"
 description = "Python SDK for Plexus: store and visualize data from drones, robots and IoT devices"
 readme = "README.md"
 license = "Apache-2.0"
@@ -37,9 +37,6 @@ dependencies = [
 video = ["Pillow>=12.2.0", "opencv-python-headless>=4.8", "numpy>=1.24"]
 dev = ["pytest>=9.0.3", "pytest-cov", "ruff==0.15.12", "websockets>=12", "opencv-python-headless>=4.8", "numpy>=1.24"]
 
-[project.scripts]
-plexus = "plexus.cli:main"
-
 [project.urls]
 Homepage = "https://plexus.company"
 Documentation = "https://docs.plexus.company"
@@ -48,14 +45,6 @@ Issues = "https://github.com/plexus-oss/plexus-python/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["plexus"]
-
-# The agent skills live at the repo root (where the verifier and the docs
-# expect them) but must ship *inside* the package so `plexus skills install`
-# can find them relative to `plexus/__init__.py` in an installed wheel.
-# Without this they reach the sdist only, which lands in a temp build dir
-# nobody looks in.
-[tool.hatch.build.targets.wheel.force-include]
-"skills" = "plexus/_skills"
 
 [tool.ruff]
 line-length = 100

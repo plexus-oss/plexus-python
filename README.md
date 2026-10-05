@@ -7,35 +7,49 @@ Plexus is storage and dashboards for hardware teams: stream data from drones, ro
 [![PyPI](https://img.shields.io/pypi/v/plexus-python)](https://pypi.org/project/plexus-python/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
-## Quick Start
+## Get started
+
+There is one way to set up Plexus: the Plexus MCP server, used from your coding agent.
+
+### With a coding agent (Claude Code, Cursor, Codex)
+
+Add the Plexus MCP server. In Claude Code:
+
+```bash
+claude mcp add --transport http plexus https://app.plexus.company/mcp
+```
+
+Then tell your agent:
+
+```
+set up Plexus
+```
+
+Approve the browser sign-in once. The agent creates a send-only API key, sends one reading, and gives you the link to your dashboard. After that, ask it to change dashboards the same way.
+
+### On a device with no agent
 
 ```bash
 pip install plexus-python
+export PLEXUS_API_KEY=plx_xxx
 ```
+
+Create the key on the API Keys page: [app.plexus.company/api](https://app.plexus.company/api).
 
 ```python
 from plexus import Plexus
 
-px = Plexus(api_key="plx_xxx", source_id="device-001")
+px = Plexus(source_id="device-001")   # reads PLEXUS_API_KEY
 px.send("temperature", 72.5)
 ```
 
-Get an API key at [app.plexus.company/api](https://app.plexus.company/api), or run `plexus init` to authorize the machine in a browser.
-
 ## Device identity
 
-Every device needs a unique `source_id`. The recommended way to set one on a real host is the bootstrap script, which requires a device name up front:
+Every device needs a unique `source_id`. Pass it to `Plexus(source_id=...)`. It must match `^[a-z0-9][a-z0-9._-]*$` (max 256 chars).
 
-```bash
-curl -sL https://app.plexus.company/setup | bash -s -- \
-  --key plx_xxx --name drone-01
-```
+Without `source_id=...` in code, the SDK makes up a random id like `source-1a2b3c4d` on first run and saves it to `~/.plexus/config.json`. Don't use the hostname: cloned SD-card images all boot as `raspberrypi`, and their telemetry merges into one source.
 
-The name is turned into the device's `source_id`, which must match `^[a-z0-9][a-z0-9._-]*$` (max 256 chars). Pass `--name` every time. Without it, and without `source_id=...` in code, the SDK makes up a random id like `source-1a2b3c4d` on first run and saves it to `~/.plexus/config.json`. Don't use the hostname: cloned SD-card images all boot as `raspberrypi`, and their telemetry merges into one source.
-
-**Names are not auto-deduplicated.** The gateway echoes back whatever `source_id` you declare, unchanged — pick a unique name per device (that's what `--name` and `source_id=...` are for). Two devices that declare the same name write into the same source.
-
-In normal code, you usually just pass `source_id=...` explicitly to `Plexus(...)` and never have to think about it.
+**Names are not auto-deduplicated.** The gateway echoes back whatever `source_id` you declare, unchanged. Two devices that declare the same name write into the same source, so pick a unique one per device.
 
 ## Core methods
 
@@ -310,40 +324,11 @@ advertised in the auth frame.
 
 | Variable                | Description                  | Default                          |
 | ----------------------- | ---------------------------- | -------------------------------- |
-| `PLEXUS_API_KEY`        | API key. Not needed if `plexus init` saved one | none            |
+| `PLEXUS_API_KEY`        | API key. Create one at app.plexus.company/api | none            |
 | `PLEXUS_GATEWAY_URL`    | HTTP ingest URL              | `https://gateway.plexus.company` |
 | `PLEXUS_GATEWAY_WS_URL` | WebSocket URL              | `wss://gateway.plexus.company`   |
 
-## CLI
-
-```bash
-plexus init                    # authorize this machine in a browser, save an API key
-plexus whoami                  # show the saved key and check it with the server
-plexus logout                  # forget the saved key
-plexus dashboards list         # dashboards as JSON files in your repo:
-plexus dashboards pull --all   #   download them to plexus/dashboards/
-plexus dashboards diff         #   show what push would change
-plexus dashboards push         #   upload local files
-plexus skills install          # copy the agent skills into ~/.claude/skills
-plexus --version
-```
-
-`plexus init` needs a browser on the same machine: it listens on `127.0.0.1`
-for the key. On a headless device, set `PLEXUS_API_KEY` instead.
-
-## Agent skills
-
-Three skills ship with the package and teach a coding agent the Plexus API —
-the endpoints, the live stream, and the mistakes that produce a silent 400.
-
-```bash
-plexus skills install          # -> ~/.claude/skills
-plexus skills install --project  # -> ./.claude/skills, travels with the repo
-```
-
-Then ask for what you want in plain language: *"send my ESP32's battery voltage
-to Plexus"*, *"build me a fleet dashboard"*. Plain Markdown, no install, no
-credentials. See [skills/README.md](skills/README.md).
+The SDK also reads `api_key` from `~/.plexus/config.json` if that file exists and `PLEXUS_API_KEY` is not set. Machines set up with an older version keep working.
 
 ## Architecture
 
