@@ -198,6 +198,7 @@ class WebSocketTransport:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._backoff_attempt = 0
+        self._closed_by_gateway = False
         self._clock_offset_ms: int = 0
         self._video_queue: queue.Queue[bytes] = queue.Queue(maxsize=2)
         self._video_thread: threading.Thread | None = None
@@ -364,7 +365,13 @@ class WebSocketTransport:
             if not self.auto_reconnect or self._stop.is_set():
                 break
 
-            delay = _backoff_delay(self._backoff_attempt)
+            if self._closed_by_gateway:
+                # A clean goodbye means another gateway is already up: come
+                # straight back (spread out, so a fleet does not arrive as one).
+                self._closed_by_gateway = False
+                delay = random.uniform(0.1, 0.5)
+            else:
+                delay = _backoff_delay(self._backoff_attempt)
             self._backoff_attempt = min(self._backoff_attempt + 1, 10)
             logger.info("plexus ws reconnect in %.1fs", delay)
             first_attempt = False
@@ -406,6 +413,9 @@ class WebSocketTransport:
             "platform": self.platform,
             "agent_version": self.agent_version,
             "protocol": PROTOCOL_VERSION,
+            # We stop using the socket the moment the gateway sends a close,
+            # so it may say goodbye to us before a deploy (see the read loop).
+            "hears_goodbye": True,
         }
         # Only v1 declarations are advertised. The gateway validates every
         # entry of a protocol-1 manifest as v1 and would answer a legacy
@@ -470,15 +480,35 @@ class WebSocketTransport:
                 last_heartbeat = now
 
             try:
-                raw = ws.recv()
+                with ws.readlock:
+                    opcode, data = ws.recv_data()
             except websocket.WebSocketTimeoutException:
                 continue
             except (websocket.WebSocketConnectionClosedException, OSError):
                 logger.info("plexus ws closed")
                 return
 
-            if not raw:
+            if opcode == websocket.ABNF.OPCODE_CLOSE:
+                # The gateway said it is going away (a deploy). Stop using this
+                # socket NOW. `recv()` hides a close message, and the
+                # connection itself can stay open for seconds behind a proxy:
+                # every reading written in that time was accepted locally and
+                # never arrived (measured 2026-10-05: 2 to 14 seconds lost per
+                # gateway deploy). Clearing the flag here, not in the caller's
+                # `finally`, closes the gap to the very next send().
+                self._authenticated.clear()
+                self._closed_by_gateway = True
+                logger.info("plexus ws closed by the gateway")
+                # The close has been answered (recv_data did that). Drop the
+                # socket ourselves rather than wait for the far end to.
+                try:
+                    ws.shutdown()
+                except Exception:  # noqa: BLE001 - already gone is fine
+                    pass
+                return
+            if opcode != websocket.ABNF.OPCODE_TEXT or not data:
                 continue
+            raw = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data
             self._dispatch(_safe_json(raw))
 
     def _dispatch(self, msg: dict[str, Any]) -> None:

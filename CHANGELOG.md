@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-10-05 - No readings lost when the gateway restarts
+
+When Plexus deploys its gateway, connected devices used to lose about two
+seconds of readings. The gateway now says goodbye first, and this version
+listens: it stops using the connection the moment it is told, sends the next
+readings over HTTP or holds them in its local buffer, and reconnects within
+half a second.
+
+- **Upgrade to get this.** Older versions keep working exactly as before, and
+  keep losing about two seconds per gateway deploy.
+- Measured on a test gateway behind the same proxy as production: six deploys
+  in a row with a device sending once a second, no reading lost. The previous
+  version lost two readings on each.
+- A batch already on its way in the instant the goodbye arrives can still be
+  lost. That is rare at one batch a second and more likely for very fast
+  senders.
+
 ## [0.15.0] - 2026-10-05 - One way to set up
 
 There is now one way to set up Plexus: the Plexus MCP server, used from a
