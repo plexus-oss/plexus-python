@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-17 - Nothing is lost while Plexus is down
+
+Until now a reading was counted as sent the moment it was written to the
+connection. If the gateway or its Redis was down, that write still succeeded
+locally and the reading was gone. On 2026-10-17 a device sending 65 readings a
+second lost 15 minutes of data that way.
+
+The gateway now acknowledges each batch after it has stored it, and this
+version waits for that acknowledgement. A batch that is not acknowledged is
+kept in the local buffer and sent again, oldest first and with its original
+timestamps, as soon as the connection is back. This covers the gateway
+restarting, Redis restarting, and a connection that silently dies behind a
+proxy.
+
+- **Upgrade to get this.** It needs the gateway deployed on or after the date
+  this ships; against an older gateway this version behaves exactly like
+  0.15.1.
+- The on-disk buffer now holds 500,000 readings (was 10,000), about two hours
+  at 65 readings a second, and never more than 256 MB. Pass
+  `max_buffer_size=` to change it. The in-memory buffer
+  (`persistent_buffer=False`) stays at 10,000.
+- `send()` returns True when the batch has been accepted for delivery, not
+  when it is stored. `close()` waits up to two seconds for the last
+  acknowledgements and keeps anything still unconfirmed on disk for the next
+  start.
+- A connection that gets no acknowledgement for 30 seconds is dropped and
+  reopened, and everything it was holding is sent again.
+- After an abnormal disconnect a batch that was stored but not yet
+  acknowledged can be sent twice. That is at most the last few batches per
+  event; duplicates are preferred to loss.
+- Readings the gateway refuses for rate (`RATE_LIMITED`, and now also
+  `SOURCE_LIMIT` / `DEVICE_LIMIT`) are still dropped and still reported
+  through `RateLimitedError`; they are not resent.
+- Fixed: a batch split across several frames could be sent twice if the
+  connection failed between frames.
+
 ## [0.15.1] - 2026-10-05 - No readings lost when the gateway restarts
 
 When Plexus deploys its gateway, connected devices used to lose about two

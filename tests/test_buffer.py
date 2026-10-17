@@ -141,3 +141,24 @@ class TestSqliteBuffer(BufferTests):
             buf2.close()
         finally:
             os.unlink(tmp.name)
+
+
+def test_sqlite_byte_cap_keeps_the_buffer_full_once_reached(tmp_path):
+    """The cap measures pages in use, not the file. SQLite never shrinks a
+    file, so measured by file size a buffer that had once reached the cap
+    evicted 10% on every add() for the rest of its life: measured before the
+    fix, 1,500 single-point adds under a 64 KB cap left 19 points."""
+    cap = 64 * 1024
+    buf = SqliteBuffer(path=str(tmp_path / "b.db"), max_size=None, max_bytes=cap)
+    try:
+        point = {"class": "event", "metric": "log", "value": "x" * 200, "timestamp": 1}
+        sizes = []
+        for _ in range(1500):
+            buf.add([dict(point)])
+            sizes.append(buf.size())
+        peak = max(sizes)
+        assert peak < 1500, "the cap is real: something was evicted"
+        assert sizes[-1] >= peak * 0.6, f"spiralled down to {sizes[-1]} of a peak of {peak}"
+        assert buf._used_bytes() <= cap + 2 * 4096  # checked before each insert
+    finally:
+        buf.close()

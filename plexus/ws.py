@@ -47,6 +47,31 @@ Server `error` frames are forwarded to `on_server_error` rather than only
 logged. They are the sole notice that a frame the socket already accepted was
 dropped upstream — `send()` returned True long before the gateway decided —
 so a caller that cannot see them cannot know it is losing data.
+
+Telemetry acknowledgements (0.16.0). A local socket write is not delivery: a
+gateway parked in a Redis retry stops reading, and behind a proxy the
+connection stays open for seconds after the gateway dies, so frames written
+then were counted as sent and were gone (2026-10-17: ~57,000 readings from
+one device). A gateway that acknowledges says so in `authenticated`:
+
+    client → device_auth ... "acks": true
+    server → {"type": "authenticated", ..., "acks": true}
+    client → {"type": "telemetry", "seq": N, "points": [...]}   # N from 1, per connection
+    server → {"type": "telemetry_ack", "seq": N}                 # stored; covers all ≤ N
+    server → {"type": "error", "code": ..., "seq": N}            # handled, not stored,
+                                                                  # do not resend; covers ≤ N
+
+Rules: without `acks` in `authenticated` nothing changes (no seq, no window;
+byte-identical to 0.15.1). With it, every frame is held in a window until the
+gateway acknowledges it; the window is bounded (ACK_WINDOW_FRAMES /
+ACK_WINDOW_POINTS) and a full window makes send_points() return False so the
+caller takes the HTTP path. Whatever is still in the window when the connection
+ends — a close, a dead socket, or no ack for ACK_TIMEOUT_S — goes to
+`on_unacked`, which the client puts back in its local buffer to send first on
+the next connection, with the original timestamps. `error REDIS_UNAVAILABLE`
+carries no seq and is followed by close 1013: nothing is released, everything
+is replayed. A frame stored but not yet acknowledged when the connection dies
+is sent twice; duplicates are preferred to loss.
 """
 
 from __future__ import annotations
@@ -99,6 +124,19 @@ MAX_REMEMBERED_RUNS = 256
 #: never reaches the server must not grow without limit. The oldest go first,
 #: loudly.
 MAX_UNACKED_STATUSES = 256
+
+#: Telemetry frames held while the gateway has not acknowledged them. When
+#: either bound is reached send_points() returns False and the caller sends
+#: over HTTP instead; nothing blocks. 32 frames of 5,000 points is more than a
+#: healthy connection ever has in flight; 10,000 points is one gateway batch.
+ACK_WINDOW_FRAMES = 32
+ACK_WINDOW_POINTS = 10_000
+
+#: Oldest unacknowledged frame older than this means the connection is dead
+#: even if the socket says otherwise (parked gateway, proxy keeping TCP open).
+#: The socket is dropped, the window is spilled to the local buffer, and the
+#: transport reconnects.
+ACK_TIMEOUT_S = 30.0
 
 #: Ceiling for one `command_status` frame. The gateway drops anything larger,
 #: so an oversized result is stripped here — losing the payload beats losing
@@ -168,6 +206,7 @@ class WebSocketTransport:
         auto_reconnect: bool = True,
         on_clock_synced: Callable[[int], None] | None = None,
         on_server_error: Callable[[str, str], None] | None = None,
+        on_unacked: Callable[[list[dict[str, Any]]], None] | None = None,
     ):
         if not api_key:
             raise ValueError("api_key required")
@@ -182,6 +221,21 @@ class WebSocketTransport:
         self.auto_reconnect = auto_reconnect
         self._on_clock_synced = on_clock_synced
         self._on_server_error = on_server_error
+        # Called with the points of every telemetry frame the gateway had not
+        # acknowledged when a connection ended. The client puts them back in
+        # its local buffer; they go out first on the next connection.
+        self._on_unacked = on_unacked
+
+        # Telemetry acknowledgements. Only active when the gateway answered
+        # `authenticated` with `acks: true`; otherwise this is 0.15.1.
+        self._acks_enabled = False
+        self._seq = 0
+        # seq → (monotonic sent_at, points), in seq order. Guarded by
+        # _window_cv, which is also notified on every release so stop() can
+        # wait for the last acknowledgements.
+        self._window: OrderedDict[int, tuple[float, list[dict[str, Any]]]] = OrderedDict()
+        self._window_points = 0
+        self._window_cv = threading.Condition()
 
         self._commands: dict[str, _RegisteredCommand] = {}
         # Commands protocol v1: declarations, what we remember about run ids,
@@ -267,7 +321,16 @@ class WebSocketTransport:
         self._video_thread.start()
         atexit.register(self.stop)
 
-    def stop(self, timeout: float = 2.0) -> None:
+    def stop(self, timeout: float = 2.0, *, ack_timeout: float | None = None) -> None:
+        """Close the connection and join the threads.
+
+        Waits up to `ack_timeout` (default: `timeout`) for the gateway to
+        acknowledge the frames still in the window before closing, so a
+        normal exit does not turn the last batch into a replay. Whatever is
+        still unacknowledged after that goes to `on_unacked` before this
+        returns, while the caller's buffer is still open.
+        """
+        self.wait_for_acks(timeout if ack_timeout is None else ack_timeout)
         self._stop.set()
         with self._ws_lock:
             ws = self._ws
@@ -280,13 +343,40 @@ class WebSocketTransport:
             self._thread.join(timeout=timeout)
         if self._video_thread:
             self._video_thread.join(timeout=timeout)
+        # The read loop spills on its way out; this covers a join that timed
+        # out. Taking an empty window is a no-op, so doing it twice is safe.
+        self._spill_window()
 
     def wait_authenticated(self, timeout: float = AUTH_TIMEOUT_S) -> bool:
         return self._authenticated.wait(timeout=timeout)
 
+    def wait_for_acks(self, timeout: float) -> bool:
+        """Block until every frame in the window is acknowledged, or `timeout`
+        seconds pass. True if the window is empty on return. Returns at once
+        when acknowledgements are off or nothing is outstanding."""
+        deadline = time.monotonic() + timeout
+        with self._window_cv:
+            while self._window:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._window_cv.wait(remaining)
+            return True
+
     @property
     def is_authenticated(self) -> bool:
         return self._authenticated.is_set()
+
+    @property
+    def acks_enabled(self) -> bool:
+        """True while connected to a gateway that acknowledges telemetry."""
+        return self._acks_enabled
+
+    @property
+    def unacked_points(self) -> int:
+        """Points sent on this connection that the gateway has not confirmed."""
+        with self._window_cv:
+            return self._window_points
 
     @property
     def reconnect_pending(self) -> bool:
@@ -300,14 +390,44 @@ class WebSocketTransport:
         return self._clock_offset_ms
 
     def send_points(self, points: list[dict[str, Any]]) -> bool:
-        """Send a telemetry frame. Returns False if the socket is not
-        authenticated — caller is expected to fall back to HTTP."""
+        """Send a telemetry frame. True means accepted for delivery: written to
+        an authenticated socket and, when the gateway acknowledges, held until
+        it confirms storage or handed to `on_unacked`. False means the caller
+        must send these points another way (not authenticated, the window is
+        full, or the local write failed); nothing is kept here in that case.
+        """
         if not points:
             return True
         if not self._authenticated.is_set():
             return False
-        frame = {"type": "telemetry", "points": points}
-        return self._send_frame(frame)
+        if not self._acks_enabled:
+            return self._send_frame({"type": "telemetry", "points": points})
+
+        # Window first, send second (the same discipline as _emit_status): a
+        # frame is never on the wire without an entry that can be replayed.
+        with self._window_cv:
+            if (
+                len(self._window) >= ACK_WINDOW_FRAMES
+                or self._window_points + len(points) > ACK_WINDOW_POINTS
+            ):
+                return False
+            self._seq += 1
+            seq = self._seq
+            self._window[seq] = (time.monotonic(), points)
+            self._window_points += len(points)
+
+        if self._send_frame({"type": "telemetry", "seq": seq, "points": points}):
+            return True
+        # The local write failed: forget the entry so the caller's HTTP send
+        # is the only copy. If the connection ended in between and the entry
+        # was already spilled to the buffer, that copy is the one that counts.
+        with self._window_cv:
+            entry = self._window.pop(seq, None)
+            if entry is None:
+                return True
+            self._window_points -= len(entry[1])
+            self._window_cv.notify_all()
+        return False
 
     def send_video_frame_async(
         self,
@@ -361,6 +481,9 @@ class WebSocketTransport:
                 self._authenticated.clear()
                 with self._ws_lock:
                     self._ws = None
+                # Nothing more can be acknowledged on this connection. What
+                # the gateway did not confirm goes back to the local buffer.
+                self._spill_window()
 
             if not self.auto_reconnect or self._stop.is_set():
                 break
@@ -416,6 +539,9 @@ class WebSocketTransport:
             # We stop using the socket the moment the gateway sends a close,
             # so it may say goodbye to us before a deploy (see the read loop).
             "hears_goodbye": True,
+            # We hold every telemetry frame until it is acknowledged, so the
+            # gateway may answer each one with telemetry_ack (module docstring).
+            "acks": True,
         }
         # Only v1 declarations are advertised. The gateway validates every
         # entry of a protocol-1 manifest as v1 and would answer a legacy
@@ -453,6 +579,15 @@ class WebSocketTransport:
         if isinstance(max_bytes, int) and 0 < max_bytes < MAX_STATUS_FRAME_BYTES:
             self._max_status_bytes = max_bytes
 
+        # Acknowledgements are per connection: seq starts again at 1, and the
+        # gateway opts in each time. Absent means an older gateway, and the
+        # frames go out exactly as they did in 0.15.1. Anything a late sender
+        # slipped into the window during the reconnect is spilled, not reused.
+        self._spill_window()
+        with self._window_cv:
+            self._acks_enabled = msg.get("acks") is True
+            self._seq = 0
+
         was_reconnect = self._backoff_attempt > 0
         self._authenticated.set()
         self._backoff_attempt = 0
@@ -470,6 +605,11 @@ class WebSocketTransport:
         ws.settimeout(1.0)
         last_heartbeat = time.monotonic()
         while not self._stop.is_set():
+            # recv_data() returns at least once a second, so this runs at
+            # least that often: an acknowledgement that is ACK_TIMEOUT_S late
+            # means the socket is dead whatever TCP says.
+            if self._ack_watchdog(ws):
+                return
             now = time.monotonic()
             if now - last_heartbeat >= HEARTBEAT_INTERVAL_S:
                 self._send_frame({
@@ -519,10 +659,22 @@ class WebSocketTransport:
             self._handle_command_run(msg, time.monotonic())
         elif mtype == "command_status_ack":
             self._handle_status_ack(msg)
+        elif mtype == "telemetry_ack":
+            seq = msg.get("seq")
+            if _is_seq(seq):
+                self._release_through(seq)
         elif mtype == "error":
             code = str(msg.get("code") or "")
             detail = str(msg.get("detail") or "")
             logger.warning("plexus ws server error: %s %s", code or "?", detail or msg)
+            # An error that names a seq is the gateway's answer to that frame:
+            # handled, not stored, do not resend (a rate or plan limit, or a
+            # frame it could not parse). REDIS_UNAVAILABLE carries no seq, so
+            # the frames stay in the window and are replayed after the close
+            # that follows it.
+            seq = msg.get("seq")
+            if _is_seq(seq):
+                self._release_through(seq)
             if self._on_server_error is not None:
                 try:
                     self._on_server_error(code, detail)
@@ -880,6 +1032,72 @@ class WebSocketTransport:
             logger.debug("plexus ws send failed: %s", e)
             return False
 
+    # ------------------------------------------------------ telemetry acks
+
+    def _release_through(self, seq: int) -> None:
+        """The gateway has dealt with every frame up to and including `seq`."""
+        with self._window_cv:
+            while self._window:
+                oldest = next(iter(self._window))
+                if oldest > seq:
+                    break
+                _seq, (_sent_at, points) = self._window.popitem(last=False)
+                self._window_points -= len(points)
+            self._window_cv.notify_all()
+
+    def _spill_window(self) -> None:
+        """Hand everything still unacknowledged to `on_unacked`, oldest first.
+
+        Called when a connection ends, for whatever reason. The points keep
+        their original timestamps; the client's buffer sends them before
+        anything new. Safe to call with an empty window.
+        """
+        with self._window_cv:
+            if not self._window:
+                return
+            points = [p for _sent_at, pts in self._window.values() for p in pts]
+            self._window.clear()
+            self._window_points = 0
+            self._window_cv.notify_all()
+        if self._on_unacked is None:
+            logger.warning(
+                "plexus ws: %d unacknowledged points dropped (no on_unacked handler)",
+                len(points),
+            )
+            return
+        logger.info(
+            "plexus ws: %d unacknowledged points returned to the local buffer", len(points)
+        )
+        try:
+            self._on_unacked(points)
+        except Exception:  # never let a callback kill the connection loop
+            logger.exception("on_unacked callback raised")
+
+    def _ack_watchdog(self, ws: websocket.WebSocket) -> bool:
+        """Drop the connection if the oldest frame has waited ACK_TIMEOUT_S.
+
+        Runs on the read loop. Returns True when it did, and the caller must
+        leave the loop: the window is then spilled by `_run` and the transport
+        reconnects. Mirrors the goodbye handling — the flag is cleared here so
+        the very next send() takes the other path.
+        """
+        if not self._acks_enabled:
+            return False
+        with self._window_cv:
+            if not self._window:
+                return False
+            sent_at = next(iter(self._window.values()))[0]
+        age = time.monotonic() - sent_at
+        if age < ACK_TIMEOUT_S:
+            return False
+        logger.warning("plexus ws: no telemetry_ack for %.0fs, reconnecting", age)
+        self._authenticated.clear()
+        try:
+            ws.shutdown()
+        except Exception:  # noqa: BLE001 - already gone is fine
+            pass
+        return True
+
 
 # --------------------------------------------------------------------- helpers
 
@@ -934,6 +1152,11 @@ def _ensure_device_path(url: str) -> str:
     if url.endswith("/ws/device"):
         return url
     return url + "/ws/device"
+
+
+def _is_seq(value: Any) -> bool:
+    """A frame sequence number: an int, and not the bool that is also an int."""
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
 def _safe_json(raw: Any) -> dict[str, Any]:

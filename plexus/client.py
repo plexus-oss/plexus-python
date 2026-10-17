@@ -261,10 +261,15 @@ class Plexus:
         source_id: Unique identifier for this source. Auto-generated if not provided.
         timeout: Request timeout in seconds. Default 10s.
         retry_config: Configuration for retry behavior. If None, uses defaults.
-        max_buffer_size: Maximum number of points to buffer locally on failures. Default 10000.
-
+        max_buffer_size: Maximum number of points held locally while they
+                 cannot be delivered (a failed send, or a batch the gateway
+                 had not acknowledged when the connection dropped). Oldest
+                 are dropped past the cap. Default: 500,000 on disk (about two
+                 hours at 65 readings/s, and never more than 256 MB), 10,000
+                 in memory.
         persistent_buffer: Keep the failed-send buffer on disk (SQLite). Default True.
-        buffer_path: Path of the on-disk buffer. Defaults to ~/.plexus/buffer.db.
+        buffer_path: Path of the on-disk buffer. Defaults to
+                 ~/.plexus/buffer-<source_id>.db.
         ws_url: Gateway WebSocket URL. Defaults to wss://gateway.plexus.company.
 
     Raises:
@@ -278,7 +283,7 @@ class Plexus:
         source_id: str | None = None,
         timeout: float = 10.0,
         retry_config: RetryConfig | None = None,
-        max_buffer_size: int = 10000,
+        max_buffer_size: int | None = None,
         persistent_buffer: bool = True,
         buffer_path: str | None = None,
         ws_url: str | None = None,
@@ -296,6 +301,11 @@ class Plexus:
         _validate_source_id(self.source_id)
         self.timeout = timeout
         self.retry_config = retry_config or RetryConfig()
+        if max_buffer_size is None:
+            max_buffer_size = (
+                self.DEFAULT_DISK_BUFFER_POINTS if persistent_buffer
+                else self.DEFAULT_MEMORY_BUFFER_POINTS
+            )
         self._max_buffer_size = max_buffer_size
 
         self._session: _Session | None = None
@@ -315,6 +325,7 @@ class Plexus:
             self._buffer: BufferBackend = SqliteBuffer(
                 path=buffer_path or buffer_path_for_source(self.source_id),
                 max_size=max_buffer_size,
+                max_bytes=self.DISK_BUFFER_MAX_BYTES,
                 on_overflow=self._on_buffer_overflow,
             )
             if buffer_path is None:
@@ -343,6 +354,14 @@ class Plexus:
         self._http_dropped_unreported = 0
         self._http_dropped_total = 0
         self._announced_rate_limited = False
+
+    # Local buffer caps. On disk, two hours at 65 readings/s: on 2026-10-17 a
+    # device at that rate lost 15 minutes of readings to a 10,000-point cap
+    # (2.5 minutes) while the gateway was down. Memory stays small on purpose.
+    # The byte cap is a backstop for large event payloads on a small SD card.
+    DEFAULT_DISK_BUFFER_POINTS = 500_000
+    DEFAULT_MEMORY_BUFFER_POINTS = 10_000
+    DISK_BUFFER_MAX_BYTES = 256 * 1024 * 1024
 
     @property
     def max_buffer_size(self):
@@ -778,6 +797,7 @@ class Plexus:
             agent_version=__version__,
             on_clock_synced=self._on_clock_synced,
             on_server_error=self._on_server_error,
+            on_unacked=self._on_unacked,
         )
         self._ws.start()
         return self._ws
@@ -788,6 +808,30 @@ class Plexus:
     def _on_clock_synced(self, offset_ms: int) -> None:
         self._clock_offset_ms = offset_ms
 
+    def _on_unacked(self, points: list[dict[str, Any]]) -> None:
+        """Keep the frames a connection ended without acknowledging.
+
+        Runs on the WS thread. The points keep their original timestamps and
+        are the oldest thing in the buffer, so the next send drains them
+        first. The buffer can already be closed when this fires at
+        interpreter exit; then there is nowhere left to keep them.
+        """
+        try:
+            self._buffer.add(points)
+        except Exception as e:  # noqa: BLE001 - nothing above this can act on it
+            logger.warning("could not keep %d unacknowledged points: %s", len(points), e)
+            return
+        if not self._announced_buffering:
+            _say(
+                f"⏸ connection lost, {len(points)} point{'s' if len(points) != 1 else ''} "
+                "held locally; they go out first when it is back"
+            )
+            self._announced_buffering = True
+
+    # Error codes that mean the gateway threw a telemetry frame away for a
+    # rate or a plan limit. Counted together and raised as RateLimitedError.
+    _DROPPED_FOR_LIMIT = ("RATE_LIMITED", "SOURCE_LIMIT", "DEVICE_LIMIT")
+
     def _on_server_error(self, code: str, detail: str) -> None:
         """Handle an error frame from the gateway. Runs on the WS read thread.
 
@@ -795,20 +839,32 @@ class Plexus:
         the socket accepted was thrown away upstream, and the send that
         produced it already returned True — so unless this is surfaced, a bench
         can lose a third of its data and see nothing but a debug log.
+        SOURCE_LIMIT and DEVICE_LIMIT are the same loss for a different reason
+        (the source's own rate, or the plan's device count) and get the same
+        treatment. None of the three is resent: the gateway answered the frame.
         """
-        if code != "RATE_LIMITED":
+        if code not in self._DROPPED_FOR_LIMIT:
             return
         with self._server_error_lock:
             self._rate_limited_frames += 1
             self._rate_limit_unreported += 1
             first = not self._announced_rate_limited
             self._announced_rate_limited = True
-        if first:
+        if not first:
+            return
+        if code == "RATE_LIMITED":
             _say(
                 "⚠ Gateway is dropping telemetry frames (RATE_LIMITED). You are "
                 "sending more messages per second than the connection allows — "
                 "the points in those frames are gone. Batch them instead: "
                 "`with px.batch() as b: b.send(...)`."
+            )
+        else:
+            _say(
+                f"⚠ Gateway is dropping telemetry frames ({code}): "
+                f"{detail or 'a rate or device limit was reached'}. The points "
+                "in those frames are gone. Send less often per device, or check "
+                "the plan's device limit."
             )
 
     @property
@@ -1335,9 +1391,14 @@ class Plexus:
         Retry behavior (HTTP path):
         - Retries on: Timeout, ConnectionError, HTTP 429, HTTP 5xx
         - No retry on: HTTP 401/403 (auth), HTTP 400/422 (bad request)
-        - On failure: the unsent chunk and all not-yet-sent points are
-          buffered locally for the next send attempt, then the error is
-          raised. Nothing is dropped on the floor.
+        - On failure: what the chunk could not deliver (see _send_chunk) and
+          all not-yet-sent points are buffered locally for the next send
+          attempt, then the error is raised. Nothing is dropped on the floor.
+
+        True means every point was accepted for delivery: stored by the
+        gateway over HTTP, or over the WebSocket written to the connection
+        and, on a gateway that acknowledges, held until it confirms storage
+        or returned to the buffer. It is not a storage receipt.
         """
         if not self.api_key:
             raise AuthenticationError(
@@ -1377,10 +1438,9 @@ class Plexus:
             try:
                 self._send_chunk(ws, batch)
             except Exception:
-                # The chunk did not land (drain() already removed it from the
-                # buffer) — put it back along with every not-yet-sent point so
-                # nothing is lost, then surface the error.
-                self._add_to_buffer(batch)
+                # _send_chunk has put back what it could not deliver. Add
+                # every not-yet-sent point behind it so nothing is lost, then
+                # surface the error.
                 if pending_new:
                     self._add_to_buffer(pending_new)
                 if not self._announced_buffering:
@@ -1392,28 +1452,44 @@ class Plexus:
                 raise
 
     def _send_chunk(self, ws, points: list[dict[str, Any]]) -> None:
-        """Send one bounded chunk (≤ _SEND_CHUNK_POINTS). Raises on failure.
+        """Send one bounded chunk (≤ _SEND_CHUNK_POINTS). Raises on failure,
+        and by then whatever it could not deliver is back in the buffer.
 
-        WebSocket preferred. A ws.send_points() True only confirms the frame
-        reached the local socket — the gateway silently drops frames over its
-        1MB read limit server-side — so chunks are sub-split to stay under
-        _WS_FRAME_BYTE_BUDGET before being treated as delivered. If the
-        socket fails partway through, the whole chunk falls back to HTTP:
-        at-least-once delivery, duplicates preferred over loss.
+        WebSocket preferred. The gateway silently drops frames over its 1MB
+        read limit, so the chunk is sub-split to stay under
+        _WS_FRAME_BYTE_BUDGET. Each sub-frame the socket accepts is either on
+        a connection that acknowledges it (held until then, replayed if not)
+        or, on an older gateway, written and counted as sent. When a sub-frame
+        is refused — the connection dropped, or the acknowledgement window is
+        full — only the sub-frames from that one on go over HTTP. Sending the
+        whole chunk again would deliver the accepted ones twice.
         """
+        rest = points
         if ws is not None and ws.is_authenticated:
-            subframes = _split_ws_frames(points, self._WS_FRAME_BYTE_BUDGET)
-            if all(ws.send_points(sub) for sub in subframes):
-                self._note_send(len(points), via="ws")
+            accepted = 0
+            for sub in _split_ws_frames(points, self._WS_FRAME_BYTE_BUDGET):
+                if not ws.send_points(sub):
+                    break
+                accepted += len(sub)
+            if accepted:
+                self._note_send(accepted, via="ws")
+            if accepted == len(points):
                 return
+            rest = points[accepted:]
         # Socket unavailable → fall through to HTTP.
         if not self._announced_http_fallback:
             _say(
                 f"⚠ WebSocket unavailable, falling back to POST {self.gateway_url}/ingest"
             )
             self._announced_http_fallback = True
-        self._send_http(points)
-        self._note_send(len(points), via="http")
+        try:
+            self._send_http(rest)
+        except Exception:
+            # drain() already removed these from the buffer; put back exactly
+            # the ones that did not land so nothing is lost or doubled.
+            self._add_to_buffer(rest)
+            raise
+        self._note_send(len(rest), via="http")
 
     def _send_http(self, points: list[dict[str, Any]]) -> None:
         """POST one chunk of points to /ingest with retries. Raises on failure."""
@@ -1580,14 +1656,26 @@ class Plexus:
         return self._send_points([])
 
     def close(self):
-        """Close the client, flush any buffered points, and release resources."""
+        """Close the client, flush any buffered points, and release resources.
+
+        Waits up to two seconds for the gateway to acknowledge the last
+        batches, sends what the buffer still holds, then closes the
+        connection. Anything still unconfirmed at that point is kept on disk
+        (with the persistent buffer) and goes out first on the next start.
+        """
+        ws = self._ws
+        acked = True
+        if ws is not None:
+            acked = ws.wait_for_acks(2.0)
         if self.buffer_size() > 0:
             try:
                 self.flush_buffer()
             except Exception as e:
                 logger.debug("flush on close failed: %s", e)
-        if self._ws is not None:
-            self._ws.stop()
+        if ws is not None:
+            # The flush may have sent more frames; give them the same chance,
+            # but do not wait a second time on a gateway that is not answering.
+            ws.stop(timeout=2.0, ack_timeout=2.0 if acked else 0.0)
             self._ws = None
         if self._session:
             self._session.close()

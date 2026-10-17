@@ -231,6 +231,10 @@ px.buffer_size()
 px.flush_buffer()
 ```
 
+**Acknowledged delivery.** Over the WebSocket a reading used to count as sent the moment it was written to the connection. If the gateway was down behind its proxy, that write still succeeded and the reading was gone. Since 0.16.0 the gateway acknowledges each batch after storing it, and the SDK holds every batch until that acknowledgement arrives. A batch that is not acknowledged (the connection dropped, the gateway or its Redis restarted, or nothing answered for 30 seconds) goes back to the local buffer and is sent again, oldest first and with its original timestamps, as soon as the connection is back. `send()` returning True means the batch has been accepted for delivery, not that it is stored. `close()` waits up to two seconds for the last acknowledgements and leaves anything still unconfirmed on disk for the next start. A batch that was stored but not yet acknowledged when the connection died is sent twice; duplicates are preferred to loss. Against a gateway older than this protocol the SDK behaves exactly as before.
+
+The on-disk buffer holds 500,000 readings (about two hours at 65 readings a second, and never more than 256 MB); the in-memory one holds 10,000. Past the cap the oldest are dropped. Pass `max_buffer_size=` to change it.
+
 ## Timestamps and clock correction
 
 By default — `px.send("temp", 72.5)` with no `timestamp` argument — the SDK picks the time itself. Over WebSocket, it synchronizes with the gateway clock on every connection, so data lands at the right place on the timeline even if the device's system clock is wrong (no NTP on first boot, stale RTC, fresh OS image).
