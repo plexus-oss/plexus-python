@@ -54,9 +54,14 @@ def _server_frame(opcode: int, payload: bytes) -> bytes:
 
 
 class _GoodbyeGateway:
-    """Accepts one device, authenticates it, says goodbye, keeps the socket open."""
+    """Accepts one device, authenticates it, says goodbye, keeps the socket open.
 
-    def __init__(self) -> None:
+    With `acks=True` the authenticated frame opts in to telemetry
+    acknowledgements, and this stub then never sends one.
+    """
+
+    def __init__(self, acks: bool = False) -> None:
+        self.acks = acks
         self.auth_frame: dict = {}
         self.said_goodbye = threading.Event()
         self._listener = socket.socket()
@@ -85,6 +90,8 @@ class _GoodbyeGateway:
         )
         self.auth_frame = json.loads(_read_client_text(conn))
         authenticated = {"type": "authenticated", "server_time_ms": int(time.time() * 1000)}
+        if self.acks:
+            authenticated["acks"] = True
         conn.sendall(_server_frame(0x1, json.dumps(authenticated).encode()))
         time.sleep(0.3)
         # 1001 "going away", then nothing: the socket is deliberately left open.
@@ -121,6 +128,40 @@ def test_stops_using_the_socket_the_moment_the_gateway_says_goodbye():
         # HTTP or its local buffer instead of writing into nothing.
         assert not transport.is_authenticated
         assert transport.send_points([{"metric": "temp", "value": 1, "timestamp": 1}]) is False
+    finally:
+        transport.stop()
+        gateway.stop()
+
+
+def test_a_batch_in_flight_when_the_goodbye_arrives_is_kept():
+    """0.15.1 left one case open: a batch written in the instant before the
+    goodbye was accepted locally and lost. On a gateway that acknowledges it
+    is still in the window when the connection ends, so it goes back to the
+    local buffer and is sent again."""
+    gateway = _GoodbyeGateway(acks=True)
+    spilled: list[list[dict]] = []
+    transport = WebSocketTransport(
+        api_key="plx_test_abc",
+        source_id="rack-01",
+        ws_url=f"ws://127.0.0.1:{gateway.port}",
+        auto_reconnect=False,
+        on_unacked=lambda points: spilled.append(list(points)),
+    )
+    transport.start()
+    try:
+        assert transport.wait_authenticated(timeout=3)
+        assert transport.acks_enabled
+        points = [{"metric": "temp", "value": 1, "timestamp": 1}]
+        # Written before the goodbye (the stub waits 0.3 s), never acknowledged.
+        assert transport.send_points(points) is True
+        assert transport.unacked_points == 1
+
+        assert gateway.said_goodbye.wait(timeout=3)
+        deadline = time.monotonic() + 3
+        while not spilled and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert spilled == [points]
+        assert transport.unacked_points == 0
     finally:
         transport.stop()
         gateway.stop()

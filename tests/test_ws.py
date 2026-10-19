@@ -141,8 +141,11 @@ def test_auth_handshake_and_telemetry(gateway):
         assert gateway.auth_frame["agent_version"] == "9.9.9"
         # commands is omitted when none registered
         assert "commands" not in gateway.auth_frame
+        # Offered on every connection; the gateway opts in per connection.
+        assert gateway.auth_frame["acks"] is True
 
-        # Telemetry frame shape
+        # Telemetry frame shape. This stub does not acknowledge, so the frame
+        # is the pre-0.16.0 one: no seq.
         assert t.send_points([
             {"metric": "battery_voltage", "value": 12.4, "timestamp": 1700000000000}
         ])
@@ -152,6 +155,8 @@ def test_auth_handshake_and_telemetry(gateway):
         tele = next(m for m in gateway.received if m["type"] == "telemetry")
         assert tele["points"][0]["metric"] == "battery_voltage"
         assert tele["points"][0]["value"] == 12.4
+        assert "seq" not in tele
+        assert t.acks_enabled is False
     finally:
         t.stop()
 

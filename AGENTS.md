@@ -55,6 +55,16 @@ px.event("log", {"level": "error", "msg": "IMU read timed out"})
 px = Plexus(api_key="plx_xxxxx", persistent_buffer=False)
 ```
 
+Delivery over the WebSocket is acknowledged (0.16.0): each batch is held until
+the gateway confirms it stored it. A batch that is not confirmed — connection
+dropped, gateway or Redis restarted, no answer for 30 s — goes back to the local
+buffer and is sent first on reconnect, with its original timestamps. `send()`
+returning True means accepted for delivery, not stored. `close()` waits up to
+2 s for acknowledgements and keeps the rest on disk for the next start. Against
+a gateway older than the protocol the SDK behaves as 0.15.1. The on-disk buffer
+holds 500,000 points (at most 256 MB), the in-memory one 10,000; oldest are
+dropped past the cap; `max_buffer_size=` overrides.
+
 ### Commands
 
 Declare what this client can be asked to do. Declare before the first `send()`.

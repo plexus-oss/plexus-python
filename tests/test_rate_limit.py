@@ -98,3 +98,14 @@ def test_a_raising_callback_cannot_kill_the_read_loop():
         on_server_error=boom,
     )
     t._dispatch({"type": "error", "code": "RATE_LIMITED"})  # must not raise
+
+
+@pytest.mark.parametrize("code", ["SOURCE_LIMIT", "DEVICE_LIMIT"])
+def test_source_and_device_limits_are_counted_like_rate_limited(code):
+    """A frame refused for the source's own rate or the plan's device count is
+    the same loss as RATE_LIMITED, reported the same way, and not resent."""
+    px = _client()
+    px._on_server_error(code, "device limit reached")
+    assert px.rate_limited_frames == 1
+    with pytest.raises(RateLimitedError):
+        px._raise_if_rate_limited()

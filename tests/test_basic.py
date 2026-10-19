@@ -114,3 +114,20 @@ def test_missing_key_error_says_how_to_set_one():
     with pytest.raises(AuthenticationError, match="PLEXUS_API_KEY") as exc:
         px._send_points([{"metric": "x", "value": 1, "timestamp": 0, "class": "metric"}])
     assert "plexus init" not in str(exc.value)
+
+
+def test_metric_rejects_inf_and_nan_at_the_call_site():
+    """json.dumps(float('inf')) emits `Infinity`, which the gateway refuses as
+    invalid JSON with no seq. A frame like that would never be acknowledged
+    and would be replayed every reconnect. Refuse it where the caller can see."""
+    import math
+
+    import pytest
+
+    from plexus.client import PlexusError
+
+    px = Plexus(api_key="test_key", endpoint="http://localhost", persistent_buffer=False)
+    for bad in (math.inf, -math.inf, math.nan):
+        with pytest.raises(PlexusError, match="finite"):
+            px._make_point("temp", bad)
+    assert px._make_point("temp", 1.5)["value"] == 1.5

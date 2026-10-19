@@ -156,8 +156,10 @@ class SqliteBuffer(BufferBackend):
               Defaults to ~/.plexus/buffer.db
         max_size: Maximum number of points to retain. None = unlimited
                   (disk-bound, suitable for store-and-forward).
-        max_bytes: Maximum database file size in bytes. None = no limit.
-                   Safety valve to prevent filling the disk.
+        max_bytes: Maximum size of the stored points in bytes (pages in use,
+                   not the file: SQLite never shrinks a file, and pages freed
+                   by eviction are reused). None = no limit. Safety valve to
+                   prevent filling the disk.
     """
 
     def __init__(
@@ -191,13 +193,9 @@ class SqliteBuffer(BufferBackend):
             return
         with self._lock:
             # Disk-space safety valve
-            if self._max_bytes is not None:
-                try:
-                    if os.path.getsize(self._path) >= self._max_bytes:
-                        logger.warning("Buffer at disk limit (%d bytes), dropping oldest", self._max_bytes)
-                        self._evict_pct(10)  # Drop 10% to make room
-                except OSError:
-                    pass
+            if self._max_bytes is not None and self._used_bytes() >= self._max_bytes:
+                logger.warning("Buffer at disk limit (%d bytes), dropping oldest", self._max_bytes)
+                self._evict_pct(10)  # Drop 10% to make room
             self._conn.executemany(
                 "INSERT INTO points (data) VALUES (?)",
                 [(json.dumps(p),) for p in points],
@@ -259,6 +257,19 @@ class SqliteBuffer(BufferBackend):
         """Close the underlying database connection."""
         with self._lock:
             self._conn.close()
+
+    def _used_bytes(self) -> int:
+        """Bytes the stored points occupy. Must be called with lock held.
+
+        Pages in use, not the file size. A deleted row's page goes to the
+        freelist and is reused by the next insert, but the file keeps its
+        size; measured by file size, a buffer that once reached the cap would
+        evict 10% on every add() from then on, however empty it had become.
+        """
+        page_size = self._conn.execute("PRAGMA page_size").fetchone()[0]
+        page_count = self._conn.execute("PRAGMA page_count").fetchone()[0]
+        free_pages = self._conn.execute("PRAGMA freelist_count").fetchone()[0]
+        return (page_count - free_pages) * page_size
 
     def _evict(self) -> None:
         """Remove oldest rows if over max_size. Must be called with lock held."""
